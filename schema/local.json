@@ -433,6 +433,7 @@
                                     ]
                                   }
                                 },
+                                "additionalProperties": false,
                                 "required": [
                                   "name",
                                   "value"
@@ -531,6 +532,7 @@
                                     ]
                                   }
                                 },
+                                "additionalProperties": false,
                                 "required": [
                                   "name",
                                   "value"
@@ -538,6 +540,7 @@
                               }
                             }
                           },
+                          "additionalProperties": false,
                           "required": [
                             "path"
                           ]
@@ -631,6 +634,12 @@
                                 "anyOf": [
                                   {
                                     "oneOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": [
+                                          "auto"
+                                        ]
+                                      },
                                       {
                                         "type": "object",
                                         "properties": {
@@ -736,6 +745,12 @@
                                 "anyOf": [
                                   {
                                     "oneOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": [
+                                          "auto"
+                                        ]
+                                      },
                                       {
                                         "type": "object",
                                         "properties": {
@@ -2918,6 +2933,12 @@
                       {
                         "oneOf": [
                           {
+                            "type": "string",
+                            "enum": [
+                              "auto"
+                            ]
+                          },
+                          {
                             "type": "object",
                             "properties": {
                               "full": {
@@ -3022,6 +3043,12 @@
                     "anyOf": [
                       {
                         "oneOf": [
+                          {
+                            "type": "string",
+                            "enum": [
+                              "auto"
+                            ]
+                          },
                           {
                             "type": "object",
                             "properties": {
