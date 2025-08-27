@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::http::jwt::Claims;
 use crate::json;
 use crate::proxy::httpproxy::PolicyClient;
 use crate::store::BackendPolicies;
@@ -548,6 +549,7 @@ impl Handler {
 		name: &str,
 		args: Option<JsonObject>,
 		user_headers: &HeaderMap,
+		claims: Option<Claims>,
 	) -> Result<serde_json::Value, anyhow::Error> {
 		let (_tool, info) = self
 			.tools
@@ -690,6 +692,9 @@ impl Handler {
 			if !request.headers().contains_key(k) {
 				request.headers_mut().insert(k.clone(), v.clone());
 			}
+		}
+		if let Some(claims) = claims.as_ref() {
+			request.extensions_mut().insert(claims.clone());
 		}
 
 		// Make the request
