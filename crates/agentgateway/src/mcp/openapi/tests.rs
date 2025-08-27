@@ -459,3 +459,38 @@ async fn test_call_tool_invalid_path_param_value() {
 	// If the request *itself* failed before sending (e.g., invalid URL formed),
 	// the error might be different.
 }
+
+#[tokio::test]
+async fn test_normalize_url_path_empty_prefix() {
+	// Test the fix for double slash issue when prefix is empty (host/port config)
+	let result = super::normalize_url_path("", "/mqtt/healthcheck");
+	assert_eq!(result, "/mqtt/healthcheck");
+}
+
+#[tokio::test]
+async fn test_normalize_url_path_with_prefix() {
+	// Test with a prefix that has trailing slash
+	let result = super::normalize_url_path("/api/v3/", "/pet");
+	assert_eq!(result, "/api/v3/pet");
+}
+
+#[tokio::test]
+async fn test_normalize_url_path_prefix_no_trailing_slash() {
+	// Test with a prefix without trailing slash
+	let result = super::normalize_url_path("/api/v3", "/pet");
+	assert_eq!(result, "/api/v3/pet");
+}
+
+#[tokio::test]
+async fn test_normalize_url_path_path_without_leading_slash() {
+	// Test with path that doesn't start with slash
+	let result = super::normalize_url_path("/api/v3", "pet");
+	assert_eq!(result, "/api/v3/pet");
+}
+
+#[tokio::test]
+async fn test_normalize_url_path_empty_prefix_path_without_slash() {
+	// Test edge case: empty prefix and path without leading slash
+	let result = super::normalize_url_path("", "pet");
+	assert_eq!(result, "/pet");
+}
