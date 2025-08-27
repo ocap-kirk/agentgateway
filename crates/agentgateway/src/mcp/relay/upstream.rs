@@ -332,12 +332,11 @@ impl UpstreamTarget {
 			},
 			UpstreamTargetSpec::OpenAPI(m) => {
 				let res = m
-					.call_tool(request.name.as_ref(), request.arguments)
+					.call_tool(request.name.as_ref(), request.arguments, &rq_ctx.headers)
 					.await?;
 				Ok(CallToolResult {
-					content: vec![Content::text(res)],
-					// TODO: for JSON responses, return structured_content
-					structured_content: None,
+					content: vec![],
+					structured_content: Some(res),
 					is_error: None,
 				})
 			},
