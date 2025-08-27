@@ -661,6 +661,34 @@ impl TryFrom<&proto::agent::PolicySpec> for Policy {
 			Some(proto::agent::policy_spec::Kind::McpAuthorization(rbac)) => {
 				Policy::McpAuthorization(McpAuthorization::try_from(rbac)?)
 			},
+			Some(proto::agent::policy_spec::Kind::Jwt(jwt)) => {
+				let mode = match proto::agent::policy_spec::jwt::Mode::try_from(jwt.mode)
+					.map_err(|_| ProtoError::EnumParse("invalid JWT mode".to_string()))?
+				{
+					proto::agent::policy_spec::jwt::Mode::Optional => http::jwt::Mode::Optional,
+					proto::agent::policy_spec::jwt::Mode::Strict => http::jwt::Mode::Strict,
+					proto::agent::policy_spec::jwt::Mode::Permissive => http::jwt::Mode::Permissive,
+				};
+
+				// Parse JWKS based on source
+				let jwks_json = match &jwt.jwks_source {
+					Some(proto::agent::policy_spec::jwt::JwksSource::Inline(inline)) => inline.clone(),
+					None => {
+						return Err(ProtoError::Generic(
+							"JWT policy missing JWKS source".to_string(),
+						));
+					},
+				};
+
+				let jwk_set: jsonwebtoken::jwk::JwkSet = serde_json::from_str(&jwks_json)
+					.map_err(|e| ProtoError::Generic(format!("failed to parse JWKS: {e}")))?;
+
+				let jwt_auth =
+					http::jwt::Jwt::from_jwks(jwk_set, mode, jwt.issuer.clone(), jwt.audiences.clone())
+						.map_err(|e| ProtoError::Generic(format!("failed to create JWT config: {e}")))?;
+
+				Policy::JwtAuth(jwt_auth)
+			},
 			Some(proto::agent::policy_spec::Kind::Ai(ai)) => {
 				let prompt_guard = ai.prompt_guard.as_ref().and_then(|pg| {
 					let reqp = pg.request.as_ref()?;

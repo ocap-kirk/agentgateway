@@ -120,6 +120,17 @@ impl LocalJwtConfig {
 			.await
 			.map_err(JwkError::JwkLoadError)?;
 
+		Jwt::from_jwks(jwks, self.mode, self.issuer, self.audiences)
+	}
+}
+
+impl Jwt {
+	pub fn from_jwks(
+		jwks: JwkSet,
+		mode: Mode,
+		issuer: String,
+		audiences: Vec<String>,
+	) -> Result<Jwt, JwkError> {
 		let mut keys = HashMap::new();
 		let to_supported_alg = |key_algorithm: Option<KeyAlgorithm>| match key_algorithm {
 			Some(key_alg) => jsonwebtoken::Algorithm::from_str(key_alg.to_string().as_str()).ok(),
@@ -150,8 +161,8 @@ impl LocalJwtConfig {
 				};
 
 				let mut validation = Validation::new(key_alg);
-				validation.set_audience(self.audiences.as_slice());
-				validation.set_issuer(std::slice::from_ref(&self.issuer));
+				validation.set_audience(&audiences);
+				validation.set_issuer(std::slice::from_ref(&issuer));
 
 				keys.insert(
 					kid,
@@ -168,10 +179,7 @@ impl LocalJwtConfig {
 			}
 		}
 
-		Ok(Jwt {
-			mode: self.mode,
-			keys,
-		})
+		Ok(Jwt { mode, keys })
 	}
 }
 
