@@ -19,6 +19,7 @@ pub mod backendtls;
 pub mod compression;
 pub mod ext_authz;
 pub mod ext_proc;
+mod peekbody;
 pub mod remoteratelimit;
 pub mod transformation_cel;
 
@@ -117,10 +118,7 @@ pub async fn inspect_body(body: &mut Body) -> anyhow::Result<Bytes> {
 }
 
 pub async fn inspect_body_with_limit(body: &mut Body, limit: usize) -> anyhow::Result<Bytes> {
-	let orig = std::mem::replace(body, Body::empty());
-	let bytes = to_bytes(orig, limit).await?;
-	*body = Body::from(bytes.clone());
-	Ok(bytes)
+	peekbody::inspect_body(body, limit).await
 }
 
 // copied from private `http` method
