@@ -17,6 +17,7 @@ use crate::types::proto::agent::mcp_target::Protocol;
 use crate::types::proto::agent::policy_spec::inference_routing::FailureMode;
 use crate::types::proto::agent::policy_spec::local_rate_limit::Type;
 use crate::*;
+use proto::agent::policy_spec::remote_rate_limit::Type as RlType;
 
 impl TryFrom<&proto::agent::TlsConfig> for TLSConfig {
 	type Error = anyhow::Error;
@@ -650,6 +651,48 @@ impl TryFrom<&proto::agent::PolicySpec> for Policy {
 					.try_into()
 					.map_err(|e| ProtoError::Generic(format!("invalid rate limit: {e}")))?,
 				])
+			},
+			Some(proto::agent::policy_spec::Kind::RemoteRateLimit(rrl)) => {
+				// Build descriptors
+				let descriptors = rrl
+					.descriptors
+					.iter()
+					.map(
+						|d| -> Result<http::remoteratelimit::DescriptorEntry, ProtoError> {
+							let entries: Result<Vec<_>, ProtoError> = d
+								.entries
+								.iter()
+								.map(|e| {
+									cel::Expression::new(e.value.clone())
+										.map_err(|e| ProtoError::Generic(format!("invalid descriptor value: {e}")))
+										.map(|expr| http::remoteratelimit::Descriptor(e.key.clone(), expr))
+								})
+								.collect();
+
+							Ok(http::remoteratelimit::DescriptorEntry {
+								entries: Arc::new(entries?),
+								limit_type: match RlType::try_from(d.r#type).unwrap_or(RlType::Requests) {
+									RlType::Requests => localratelimit::RateLimitType::Requests,
+									RlType::Tokens => localratelimit::RateLimitType::Tokens,
+								},
+							})
+						},
+					)
+					.collect::<Result<Vec<_>, _>>()?;
+
+				// Require target (no legacy host)
+				let target = resolve_simple_reference(rrl.target.as_ref())?;
+				if matches!(target, SimpleBackendReference::Invalid) {
+					return Err(ProtoError::Generic(
+						"remote_rate_limit: target must be set".into(),
+					));
+				}
+
+				Policy::RemoteRateLimit(http::remoteratelimit::RemoteRateLimit {
+					domain: rrl.domain.clone(),
+					target: Arc::new(target),
+					descriptors: Arc::new(http::remoteratelimit::DescriptorSet(descriptors)),
+				})
 			},
 			Some(proto::agent::policy_spec::Kind::ExtAuthz(ea)) => {
 				let target = resolve_simple_reference(ea.target.as_ref())?;
