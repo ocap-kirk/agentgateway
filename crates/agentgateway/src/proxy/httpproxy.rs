@@ -8,7 +8,6 @@ use headers::HeaderMapExt;
 use hyper::body::Incoming;
 use hyper::upgrade::OnUpgrade;
 use hyper_util::rt::TokioIo;
-use itertools::Itertools;
 use rand::Rng;
 use rand::seq::IndexedRandom;
 use tracing::{debug, trace};
@@ -191,57 +190,6 @@ fn apply_response_filters(
 	Ok(())
 }
 
-fn load_balance(
-	pi: Arc<ProxyInputs>,
-	svc: &Service,
-	svc_port: u16,
-	override_dest: Option<SocketAddr>,
-) -> Option<(&Endpoint, Arc<Workload>)> {
-	let state = &pi.stores;
-	let workloads = &state.read_discovery().workloads;
-	let target_port = svc.ports.get(&svc_port).copied();
-
-	if target_port.is_none() {
-		// Port doesn't exist on the service at all, this is invalid
-		debug!("service {} does not have port {}", svc.hostname, svc_port);
-		return None;
-	};
-
-	let endpoints = svc.endpoints.iter().filter_map(|ep| {
-		let Some(wl) = workloads.find_uid(&ep.workload_uid) else {
-			debug!("failed to fetch workload for {}", ep.workload_uid);
-			return None;
-		};
-		if target_port.unwrap_or_default() == 0 && !ep.port.contains_key(&svc_port) {
-			// Filter workload out, it doesn't have a matching port
-			trace!(
-				"filter endpoint {}, it does not have service port {}",
-				ep.workload_uid, svc_port
-			);
-			return None;
-		}
-		if let Some(o) = override_dest
-			&& !wl.workload_ips.contains(&o.ip())
-		{
-			// We ignore port, assume its a bug to have a mismatch
-			trace!(
-				"filter endpoint {}, it was not the selected endpoint {}",
-				ep.workload_uid, o
-			);
-			return None;
-		}
-		Some((ep, wl))
-	});
-
-	let options = endpoints.collect_vec();
-	options
-		.choose_weighted(&mut rand::rng(), |(_, wl)| wl.capacity as u64)
-		// This can fail if there are no weights, the sum is zero (not possible in our API), or if it overflows
-		// The API has u32 but we sum into an u64, so it would take ~4 billion entries of max weight to overflow
-		.ok()
-		.cloned()
-}
-
 #[derive(Clone)]
 pub struct HTTPProxy {
 	pub(super) bind_name: BindName,
@@ -297,6 +245,7 @@ impl HTTPProxy {
 		// We will also record trailer info there.
 		log.with(|l| {
 			l.status = Some(resp.status());
+			l.retry_after = http::outlierdetection::retry_after(resp.status(), resp.headers());
 			l.cel.ctx().with_response(&resp)
 		});
 
@@ -773,8 +722,12 @@ async fn make_backend_call(
 		},
 		Backend::Service(svc, port) => {
 			let port = *port;
-			let (ep, wl) = load_balance(inputs.clone(), svc.as_ref(), port, override_dest)
+			let workloads = &inputs.stores.read_discovery().workloads;
+			let (ep, handle, wl) = svc
+				.endpoints
+				.select_endpoint(workloads, svc.as_ref(), port, None)
 				.ok_or(ProxyError::NoHealthyEndpoints)?;
+
 			let svc_target_port = svc.ports.get(&port).copied().unwrap_or_default();
 			let target_port = if let Some(&ep_target_port) = ep.port.get(&port) {
 				// prefer endpoint port mapping
@@ -796,6 +749,7 @@ async fn make_backend_call(
 				return Err(ProxyResponse::from(ProxyError::NoHealthyEndpoints));
 			};
 			let dest = SocketAddr::from((*ip, target_port));
+			log.add(move |l| l.request_handle = Some(handle));
 			BackendCall {
 				target: Target::Address(dest),
 				http_version_override,
@@ -1183,13 +1137,13 @@ impl PolicyClient {
 trait OptLogger {
 	fn add<F>(&mut self, f: F)
 	where
-		F: Fn(&mut RequestLog);
+		F: FnOnce(&mut RequestLog);
 }
 
 impl OptLogger for Option<&mut RequestLog> {
 	fn add<F>(&mut self, f: F)
 	where
-		F: Fn(&mut RequestLog),
+		F: FnOnce(&mut RequestLog),
 	{
 		if let Some(log) = self.as_mut() {
 			f(log)

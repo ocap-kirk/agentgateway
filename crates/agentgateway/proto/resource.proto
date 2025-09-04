@@ -281,16 +281,16 @@ message PolicySpec {
     google.protobuf.Duration fill_interval = 3;
     Type type = 4;
   }
-    message Ai {
-      message Message {
-        string role = 1;
-        string content = 2;
-      }
+  message Ai {
+    message Message {
+      string role = 1;
+      string content = 2;
+    }
 
-      message PromptEnrichment {
-        repeated Message append = 1;
-        repeated Message prepend = 2;
-      }
+    message PromptEnrichment {
+      repeated Message append = 1;
+      repeated Message prepend = 2;
+    }
 
     enum BuiltinRegexRule {
       BUILTIN_UNSPECIFIED = 0;
