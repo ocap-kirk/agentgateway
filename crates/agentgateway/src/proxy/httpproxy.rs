@@ -258,10 +258,6 @@ impl HTTPProxy {
 		log: &mut RequestLog,
 	) -> Result<Response, ProxyResponse> {
 		log.tls_info = connection.get::<TLSConnectionInfo>().cloned();
-		log
-			.cel
-			.ctx()
-			.with_source(&log.tcp_info, log.tls_info.as_ref());
 		let selected_listener = self.selected_listener.clone();
 		let inputs = self.inputs.clone();
 		let bind_name = self.bind_name.clone();
@@ -363,6 +359,10 @@ impl HTTPProxy {
 		);
 		// Register all expressions
 		route_policies.register_cel_expressions(log.cel.ctx());
+		log
+			.cel
+			.ctx()
+			.with_source(&log.tcp_info, log.tls_info.as_ref());
 		// This is unfortunate but we record the request twice possibly; we want to record it as early as possible
 		// so we can do logging, etc when we find no routes.
 		// But we may find new expressions that now need the request.
