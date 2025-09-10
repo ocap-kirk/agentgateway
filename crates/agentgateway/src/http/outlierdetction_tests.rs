@@ -16,7 +16,7 @@ fn test_process_rate_limit_headers() {
 	};
 	let assert = |headers: &[(&str, &str)], want: Option<Duration>| {
 		let got = get(headers);
-		assert_eq!(got, want, "headers: {:?} wanted {:?}", headers, want);
+		assert_eq!(got, want, "headers: {headers:?} wanted {want:?}");
 	};
 	assert(&[("retry-after", "120")], Some(Duration::from_secs(120)));
 	assert(&[("retry-after", "60")], Some(Duration::from_secs(60)));

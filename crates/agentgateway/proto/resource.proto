@@ -509,11 +509,10 @@ message StaticBackend {
 }
 
 message AIBackend {
-  message Override {
+  message HostOverride {
     string host = 1;
     int32 port = 2;
   }
-  Override override = 1;
   message OpenAI {
     google.protobuf.StringValue model = 1;
   }
@@ -534,14 +533,22 @@ message AIBackend {
     google.protobuf.StringValue guardrail_identifier = 3;
     google.protobuf.StringValue guardrail_version = 4;
   }
-  oneof provider {
-    OpenAI openai = 2;
-    Gemini gemini = 3;
-    Vertex vertex = 4;
-    Anthropic anthropic = 5;
-    Bedrock bedrock = 6;
+  message Provider {
+    string name = 1;
+    HostOverride host_override = 2;
+    google.protobuf.StringValue path_override = 3;
+    oneof provider {
+      OpenAI openai = 4;
+      Gemini gemini = 5;
+      Vertex vertex = 6;
+      Anthropic anthropic = 7;
+      Bedrock bedrock = 8;
+    }
   }
-  google.protobuf.StringValue path_override = 7;
+  message ProviderGroup {
+    repeated Provider providers = 1;
+  }
+  repeated ProviderGroup provider_groups = 1;
 }
 
 message MCPBackend {

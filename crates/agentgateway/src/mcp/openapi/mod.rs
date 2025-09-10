@@ -507,13 +507,13 @@ fn normalize_url_path(prefix: &str, path: &str) -> String {
 		path
 	} else {
 		// If path doesn't start with '/', add one
-		&format!("/{}", path)
+		&format!("/{path}")
 	};
 
 	if prefix.is_empty() {
 		path.to_string()
 	} else {
-		format!("{}{}", prefix, path)
+		format!("{prefix}{path}")
 	}
 }
 
