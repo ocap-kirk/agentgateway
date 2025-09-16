@@ -15,7 +15,7 @@ use crate::client::Client;
 use crate::http::auth::BackendAuth;
 use crate::http::backendtls::LocalBackendTLS;
 use crate::http::{filters, retry, timeout};
-use crate::llm::{AIBackend, AIProvider, NamedAIProvider};
+use crate::llm::{AIBackend, AIProvider, NamedAIProvider, RouteType};
 use crate::mcp::rbac::McpAuthorization;
 use crate::store::LocalWorkload;
 use crate::types::agent::PolicyTarget::RouteRule;
@@ -191,7 +191,14 @@ pub struct LocalNamedAIProvider {
 	/// This comes with the cost of an expensive operation.
 	#[serde(default)]
 	pub tokenize: bool,
-
+	/// Routes defines how to identify the type of traffic we should handle
+	/// The keys are URL suffix matches, like `/v1/models`. The special `*` can be used to match anything.
+	#[serde(default)]
+	#[cfg_attr(
+		feature = "schema",
+		schemars(with = "std::collections::HashMap<String, String>")
+	)]
+	pub routes: IndexMap<Strng, RouteType>,
 	#[serde(rename = "backendTLS", default)]
 	pub backend_tls: Option<LocalBackendTLS>,
 	#[serde(default)]
@@ -236,6 +243,7 @@ impl LocalAIBackend {
 						host_override: p.host_override,
 						path_override: p.path_override,
 						tokenize: p.tokenize,
+						routes: p.routes,
 					},
 				));
 			}
