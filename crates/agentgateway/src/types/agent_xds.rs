@@ -10,7 +10,7 @@ use crate::http::auth::{AwsAuth, BackendAuth, SimpleBackendAuth};
 use crate::http::transformation_cel::{LocalTransform, LocalTransformationConfig, Transformation};
 use crate::http::{StatusCode, authorization, backendtls, ext_proc, filters, localratelimit, uri};
 use crate::llm::{AIBackend, AIProvider, NamedAIProvider};
-use crate::mcp::rbac::McpAuthorization;
+use crate::mcp::McpAuthorization;
 use crate::types::discovery::NamespacedHostname;
 use crate::types::proto;
 use crate::types::proto::ProtoError;
@@ -1137,10 +1137,10 @@ fn convert_header_match(h: &[proto::agent::HeaderMatch]) -> Result<Vec<HeaderMat
 
 #[cfg(test)]
 mod tests {
-	use crate::types::proto::agent::policy_spec::Ai;
 	use serde_json::json;
 
 	use super::*;
+	use crate::types::proto::agent::policy_spec::Ai;
 
 	#[test]
 	fn test_policy_spec_to_ai_policy() -> Result<(), ProtoError> {
