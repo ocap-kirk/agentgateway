@@ -884,53 +884,58 @@ impl TryFrom<&proto::agent::PolicySpec> for Policy {
 			},
 			Some(proto::agent::policy_spec::Kind::Ai(ai)) => {
 				let prompt_guard = ai.prompt_guard.as_ref().and_then(|pg| {
-					let reqp = pg.request.as_ref()?;
+					if pg.request.is_none() && pg.response.is_none() {
+						return None;
+					}
+					let request_guard = pg.request.as_ref().map(|reqp| {
+						let rejection = if let Some(resp) = &reqp.rejection {
+							let status = u16::try_from(resp.status)
+								.ok()
+								.and_then(|c| StatusCode::from_u16(c).ok())
+								.unwrap_or(StatusCode::FORBIDDEN);
+							crate::llm::policy::RequestRejection {
+								body: Bytes::from(resp.body.clone()),
+								status,
+							}
+						} else {
+							//  use default response, since the response field is not optional on RequestGuard
+							crate::llm::policy::RequestRejection::default()
+						};
 
-					let rejection = if let Some(resp) = &reqp.rejection {
-						let status = u16::try_from(resp.status)
-							.ok()
-							.and_then(|c| StatusCode::from_u16(c).ok())
-							.unwrap_or(StatusCode::FORBIDDEN);
-						crate::llm::policy::RequestRejection {
-							body: Bytes::from(resp.body.clone()),
-							status,
-						}
-					} else {
-						//  use default response, since the response field is not optional on RequestGuard
-						crate::llm::policy::RequestRejection::default()
-					};
-
-					let regex = reqp
-						.regex
-						.as_ref()
-						.map(|rr| convert_regex_rules(rr, Some(rejection.clone())));
-
-					let webhook = reqp.webhook.as_ref().and_then(convert_webhook);
-
-					let openai_moderation =
-						reqp
-							.openai_moderation
+						let regex = reqp
+							.regex
 							.as_ref()
-							.map(|m| crate::llm::policy::Moderation {
-								model: m.model.as_deref().map(strng::new),
-								auth: match m.auth.as_ref().and_then(|a| a.kind.clone()) {
-									Some(crate::types::proto::agent::backend_auth_policy::Kind::Passthrough(_)) => {
-										SimpleBackendAuth::Passthrough {}
-									},
-									Some(crate::types::proto::agent::backend_auth_policy::Kind::Key(k)) => {
-										SimpleBackendAuth::Key(k.secret.into())
-									},
-									_ => SimpleBackendAuth::Passthrough {},
-								},
-							});
+							.map(|rr| convert_regex_rules(rr, Some(rejection.clone())));
 
-					Some(crate::llm::policy::PromptGuard {
-						request: Some(crate::llm::policy::RequestGuard {
+						let webhook = reqp.webhook.as_ref().and_then(convert_webhook);
+
+						let openai_moderation =
+							reqp
+								.openai_moderation
+								.as_ref()
+								.map(|m| crate::llm::policy::Moderation {
+									model: m.model.as_deref().map(strng::new),
+									auth: match m.auth.as_ref().and_then(|a| a.kind.clone()) {
+										Some(crate::types::proto::agent::backend_auth_policy::Kind::Passthrough(_)) => {
+											SimpleBackendAuth::Passthrough {}
+										},
+										Some(crate::types::proto::agent::backend_auth_policy::Kind::Key(k)) => {
+											SimpleBackendAuth::Key(k.secret.into())
+										},
+										_ => SimpleBackendAuth::Passthrough {},
+									},
+								});
+
+						crate::llm::policy::RequestGuard {
 							rejection,
 							regex,
 							webhook,
 							openai_moderation,
-						}),
+						}
+					});
+
+					Some(crate::llm::policy::PromptGuard {
+						request: request_guard,
 						response: pg
 							.response
 							.as_ref()
