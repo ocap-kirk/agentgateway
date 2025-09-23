@@ -6,9 +6,13 @@ use std::collections::HashMap;
 #[allow(deprecated)]
 #[allow(deprecated_in_future)]
 pub use async_openai::types::ChatCompletionFunctions;
-use async_openai::types::Stop;
+use async_openai::types::{
+	ChatChoiceLogprobs, ChatCompletionMessageToolCall, ChatCompletionMessageToolCallChunk,
+	ChatCompletionResponseMessageAudio, CompletionUsage, FunctionCallStream, ServiceTierResponse,
+	Stop,
+};
 pub use async_openai::types::{
-	ChatChoice, ChatChoiceStream, ChatCompletionAudio, ChatCompletionFunctionCall,
+	ChatCompletionAudio, ChatCompletionFunctionCall,
 	ChatCompletionMessageToolCall as MessageToolCall, ChatCompletionModalities,
 	ChatCompletionNamedToolChoice as NamedToolChoice,
 	ChatCompletionRequestAssistantMessage as RequestAssistantMessage,
@@ -23,15 +27,174 @@ pub use async_openai::types::{
 	ChatCompletionRequestToolMessageContent as RequestToolMessageContent,
 	ChatCompletionRequestUserMessage as RequestUserMessage,
 	ChatCompletionRequestUserMessageContent as RequestUserMessageContent,
-	ChatCompletionResponseMessage as ResponseMessage, ChatCompletionStreamOptions as StreamOptions,
-	ChatCompletionStreamResponseDelta as StreamResponseDelta, ChatCompletionTool,
+	ChatCompletionStreamOptions as StreamOptions, ChatCompletionTool,
 	ChatCompletionToolChoiceOption as ToolChoiceOption, ChatCompletionToolChoiceOption,
 	ChatCompletionToolType as ToolType, CompletionUsage as Usage, CreateChatCompletionRequest,
-	CreateChatCompletionResponse as Response, CreateChatCompletionStreamResponse as StreamResponse,
 	FinishReason, FunctionCall, PredictionContent, ReasoningEffort, ResponseFormat, Role,
 	ServiceTier, WebSearchOptions,
 };
 use serde::{Deserialize, Serialize};
+
+/// Represents a chat completion response returned by model, based on the provided input.
+#[derive(Debug, Deserialize, Clone, PartialEq, Serialize)]
+pub struct Response {
+	/// A unique identifier for the chat completion.
+	pub id: String,
+	/// A list of chat completion choices. Can be more than one if `n` is greater than 1.
+	pub choices: Vec<ChatChoice>,
+	/// The Unix timestamp (in seconds) of when the chat completion was created.
+	pub created: u32,
+	/// The model used for the chat completion.
+	pub model: String,
+	/// The service tier used for processing the request. This field is only included if the `service_tier` parameter is specified in the request.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub service_tier: Option<ServiceTierResponse>,
+	/// This fingerprint represents the backend configuration that the model runs with.
+	///
+	/// Can be used in conjunction with the `seed` request parameter to understand when backend changes have been made that might impact determinism.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub system_fingerprint: Option<String>,
+
+	/// The object type, which is always `chat.completion`.
+	pub object: String,
+	pub usage: Option<CompletionUsage>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Serialize)]
+/// Represents a streamed chunk of a chat completion response returned by model, based on the provided input.
+pub struct StreamResponse {
+	/// A unique identifier for the chat completion. Each chunk has the same ID.
+	pub id: String,
+	/// A list of chat completion choices. Can contain more than one elements if `n` is greater than 1. Can also be empty for the last chunk if you set `stream_options: {"include_usage": true}`.
+	pub choices: Vec<ChatChoiceStream>,
+
+	/// The Unix timestamp (in seconds) of when the chat completion was created. Each chunk has the same timestamp.
+	pub created: u32,
+	/// The model to generate the completion.
+	pub model: String,
+	/// The service tier used for processing the request. This field is only included if the `service_tier` parameter is specified in the request.
+	pub service_tier: Option<ServiceTierResponse>,
+	/// This fingerprint represents the backend configuration that the model runs with.
+	/// Can be used in conjunction with the `seed` request parameter to understand when backend changes have been made that might impact determinism.
+	pub system_fingerprint: Option<String>,
+	/// The object type, which is always `chat.completion.chunk`.
+	pub object: String,
+
+	/// An optional field that will only be present when you set `stream_options: {"include_usage": true}` in your request.
+	/// When present, it contains a null value except for the last chunk which contains the token usage statistics for the entire request.
+	pub usage: Option<CompletionUsage>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
+pub struct ChatChoiceStream {
+	/// The index of the choice in the list of choices.
+	pub index: u32,
+	pub delta: StreamResponseDelta,
+	/// The reason the model stopped generating tokens. This will be
+	/// `stop` if the model hit a natural stop point or a provided
+	/// stop sequence,
+	///
+	/// `length` if the maximum number of tokens specified in the
+	/// request was reached,
+	/// `content_filter` if content was omitted due to a flag from our
+	/// content filters,
+	/// `tool_calls` if the model called a tool, or `function_call`
+	/// (deprecated) if the model called a function.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub finish_reason: Option<FinishReason>,
+	/// Log probability information for the choice.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub logprobs: Option<ChatChoiceLogprobs>,
+}
+
+/// A chat completion delta generated by streamed model responses.
+#[derive(Default, Debug, Deserialize, Serialize, Clone, PartialEq)]
+pub struct StreamResponseDelta {
+	/// The contents of the chunk message.
+	pub content: Option<String>,
+	/// Deprecated and replaced by `tool_calls`. The name and arguments of a function that should be called, as generated by the model.
+	#[deprecated]
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub function_call: Option<FunctionCallStream>,
+
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub tool_calls: Option<Vec<ChatCompletionMessageToolCallChunk>>,
+	/// The role of the author of this message.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub role: Option<Role>,
+	/// The refusal message generated by the model.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub refusal: Option<String>,
+
+	/// Agentgateway: added reasoning_content
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub reasoning_content: Option<String>,
+
+	/// Agentgateway: add opaque passthrough for fields like reasoning, etc that we do not support
+	#[serde(flatten)]
+	pub extra: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
+pub struct ChatChoice {
+	/// The index of the choice in the list of choices.
+	pub index: u32,
+	pub message: ResponseMessage,
+	/// The reason the model stopped generating tokens. This will be `stop` if the model hit a natural stop point or a provided stop sequence,
+	/// `length` if the maximum number of tokens specified in the request was reached,
+	/// `content_filter` if content was omitted due to a flag from our content filters,
+	/// `tool_calls` if the model called a tool, or `function_call` (deprecated) if the model called a function.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub finish_reason: Option<FinishReason>,
+	/// Log probability information for the choice.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub logprobs: Option<ChatChoiceLogprobs>,
+}
+
+/// A chat completion message generated by the model.
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
+pub struct ResponseMessage {
+	/// The contents of the message.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub content: Option<String>,
+	/// The refusal message generated by the model.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub refusal: Option<String>,
+	/// The tool calls generated by the model, such as function calls.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub tool_calls: Option<Vec<ChatCompletionMessageToolCall>>,
+
+	/// The role of the author of this message.
+	pub role: Role,
+
+	/// Deprecated and replaced by `tool_calls`.
+	/// The name and arguments of a function that should be called, as generated by the model.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	#[deprecated]
+	pub function_call: Option<FunctionCall>,
+
+	/// If the audio output modality is requested, this object contains data about the audio response from the model. [Learn more](https://platform.openai.com/docs/guides/audio).
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub audio: Option<ChatCompletionResponseMessageAudio>,
+
+	/// Agentgateway: add reasoning, which is non-standard.
+	///
+	/// There is no consistent standard for OpenAI compatible endpoints in how to express 'reasoning'
+	/// Deepseek: reasoning_content (https://api-docs.deepseek.com/guides/reasoning_model)
+	/// z.ai: reasoning_content (https://docs.z.ai/api-reference/llm/chat-completion#response-message-reasoning-content
+	/// OpenRouter: `reasoning` and `reasoning_details` (https://openrouter.ai/docs/use-cases/reasoning-tokens#reasoning_details-array-structure)
+	/// LiteLLM: `reasoning_content` and `thinking_blocks` (https://docs.litellm.ai/docs/reasoning_content)
+	///
+	/// Since 3/4 of these use `reasoning_content`, it seems like a reasonable default.
+	/// Note: due to 'extra' below we still get other fields passed through, too; we just won't do anything
+	/// specific with them.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub reasoning_content: Option<String>,
+
+	/// Agentgateway: add opaque passthrough for fields like reasoning, etc that we do not support
+	#[serde(flatten)]
+	pub extra: Option<serde_json::Value>,
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Request {
@@ -40,6 +203,7 @@ pub struct Request {
 
 	/// ID of the model to use.
 	/// See the [model endpoint compatibility](https://platform.openai.com/docs/models#model-endpoint-compatibility) table for details on which models work with the Chat API.
+	/// Agentgateway: translated this to Option<> since the users can override the model.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub model: Option<String>,
 

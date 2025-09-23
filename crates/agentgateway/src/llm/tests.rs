@@ -1,11 +1,10 @@
-use std::fs;
-use std::path::Path;
-
+use super::*;
 use agent_core::strng;
+use http_body_util::BodyExt;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-
-use super::*;
+use std::fs;
+use std::path::Path;
 
 fn test_response<T: DeserializeOwned>(
 	test_name: &str,
@@ -36,6 +35,36 @@ fn test_response<T: DeserializeOwned>(
 			".id" => "[id]",
 			".created" => "[date]",
 		});
+	});
+}
+
+async fn test_streaming(
+	test_name: &str,
+	xlate: impl Fn(Body, AsyncLog<LLMResponse>) -> Result<Body, AIError>,
+) {
+	let test_dir = Path::new("src/llm/tests");
+
+	// Read input JSON
+	let input_path = test_dir.join(test_name);
+	let provider =
+		&fs::read(&input_path).unwrap_or_else(|_| panic!("{test_name}: Failed to read input file"));
+	let body = Body::from(provider.clone());
+	let log = AsyncLog::default();
+	let resp = xlate(body, log).expect("failed to translate stream");
+	let resp_bytes = resp.collect().await.unwrap().to_bytes();
+	let resp_str = std::str::from_utf8(&resp_bytes).unwrap();
+
+	insta::with_settings!({
+			// info => "",
+			description => input_path.to_string_lossy().to_string(),
+			omit_expression => true,
+			prepend_module_to_snapshot => false,
+			snapshot_path => "tests",
+			filters => vec![
+				("\"created\":[0-9]*","\"created\":123")
+			]
+	}, {
+			 insta::assert_snapshot!(test_name, resp_str);
 	});
 }
 
@@ -70,13 +99,36 @@ fn test_request<T: Serialize>(
 	});
 }
 
-const ALL_REQUESTS: &[&str] = &["request_basic", "request_full", "request_tool-call"];
+const ALL_REQUESTS: &[&str] = &[
+	"request_basic",
+	"request_full",
+	"request_tool-call",
+	"request_reasoning",
+];
 
 #[test]
-fn test_bedrock() {
+fn test_openai() {
+	let response = |i| Ok(i);
+	test_response::<universal::Response>("response_basic", response);
+	test_response::<universal::Response>("response_reasoning_openrouter", response);
+}
+
+#[tokio::test]
+async fn test_bedrock() {
 	let response = |i| bedrock::translate_response(i, &strng::new("fake-model"));
 	test_response::<bedrock::types::ConverseResponse>("response_bedrock_basic", response);
 	test_response::<bedrock::types::ConverseResponse>("response_bedrock_tool", response);
+
+	let stream_response = |i, log| {
+		Ok(bedrock::translate_stream(
+			i,
+			log,
+			"model".to_string(),
+			"request-id".to_string(),
+		))
+	};
+	test_streaming("response_stream-bedrock_basic.bin", stream_response).await;
+
 	let provider = bedrock::Provider {
 		model: Some(strng::new("test-model")),
 		region: strng::new("us-east-1"),
@@ -89,11 +141,16 @@ fn test_bedrock() {
 	}
 }
 
-#[test]
-fn test_anthropic() {
+#[tokio::test]
+async fn test_anthropic() {
 	let response = |i| Ok(anthropic::translate_response(i));
 	test_response::<anthropic::types::MessagesResponse>("response_anthropic_basic", response);
 	test_response::<anthropic::types::MessagesResponse>("response_anthropic_tool", response);
+	test_response::<anthropic::types::MessagesResponse>("response_anthropic_thinking", response);
+
+	let stream_response = |i, log| Ok(anthropic::translate_stream(i, log));
+	test_streaming("response_stream-anthropic_basic.json", stream_response).await;
+	test_streaming("response_stream-anthropic_thinking.json", stream_response).await;
 
 	let request = |i| Ok(anthropic::translate_request(i));
 	for r in ALL_REQUESTS {
