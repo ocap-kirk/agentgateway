@@ -1,4 +1,5 @@
 use std::str::FromStr;
+use std::sync::Arc;
 
 use ::http::uri::{Authority, PathAndQuery};
 use ::http::{HeaderValue, StatusCode, header};
@@ -331,6 +332,12 @@ impl AIProvider {
 		};
 
 		if let Some(p) = policies {
+			// Apply model alias resolution
+			if let Some(model) = req.model.as_ref()
+				&& let Some(aliased) = p.model_aliases.get(model.as_str())
+			{
+				req.model = Some(aliased.to_string());
+			}
 			p.apply_prompt_enrichment(&mut req);
 			let http_headers = &parts.headers;
 			let claims = parts.extensions.get::<Claims>().cloned();

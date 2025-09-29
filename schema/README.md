@@ -191,6 +191,7 @@ This folder contains JSON schemas for various parts of the project
 |`binds[].listeners[].routes[].policies.ai.prompts.prepend`||
 |`binds[].listeners[].routes[].policies.ai.prompts.prepend.role`||
 |`binds[].listeners[].routes[].policies.ai.prompts.prepend.content`||
+|`binds[].listeners[].routes[].policies.ai.modelAliases`||
 |`binds[].listeners[].routes[].policies.backendTLS`|Send TLS to the backend.|
 |`binds[].listeners[].routes[].policies.backendTLS.cert`||
 |`binds[].listeners[].routes[].policies.backendTLS.key`||
@@ -417,6 +418,7 @@ This folder contains JSON schemas for various parts of the project
 |`binds[].listeners[].routes[].backends[].(1)ai.(any)prompts.prepend`||
 |`binds[].listeners[].routes[].backends[].(1)ai.(any)prompts.prepend.role`||
 |`binds[].listeners[].routes[].backends[].(1)ai.(any)prompts.prepend.content`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)modelAliases`||
 |`binds[].listeners[].routes[].backends[].(1)ai.(any)groups`||
 |`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers`||
 |`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].name`||
@@ -525,6 +527,7 @@ This folder contains JSON schemas for various parts of the project
 |`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].prompts.prepend`||
 |`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].prompts.prepend.role`||
 |`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].prompts.prepend.content`||
+|`binds[].listeners[].routes[].backends[].(1)ai.(any)groups[].providers[].modelAliases`||
 |`binds[].listeners[].routes[].backends[].weight`||
 |`binds[].listeners[].tcpRoutes`||
 |`binds[].listeners[].tcpRoutes[].name`||
@@ -672,6 +675,7 @@ This folder contains JSON schemas for various parts of the project
 |`policies[].policy.ai.prompts.prepend`||
 |`policies[].policy.ai.prompts.prepend.role`||
 |`policies[].policy.ai.prompts.prepend.content`||
+|`policies[].policy.ai.modelAliases`||
 |`policies[].policy.backendTLS`|Send TLS to the backend.|
 |`policies[].policy.backendTLS.cert`||
 |`policies[].policy.backendTLS.key`||

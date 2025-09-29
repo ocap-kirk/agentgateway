@@ -961,6 +961,11 @@ impl TryFrom<&proto::agent::PolicySpec> for Policy {
 							.collect::<Result<_, _>>()?,
 					),
 					prompts: ai.prompts.as_ref().map(convert_prompt_enrichment),
+					model_aliases: ai
+						.model_aliases
+						.iter()
+						.map(|(k, v)| (strng::new(k), strng::new(v)))
+						.collect(),
 				}))
 			},
 			_ => return Err(ProtoError::EnumParse("unknown spec kind".to_string())),
@@ -1216,6 +1221,7 @@ mod tests {
 				.collect(),
 				prompt_guard: None,
 				prompts: None,
+				model_aliases: Default::default(),
 			})),
 		};
 

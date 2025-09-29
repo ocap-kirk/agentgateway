@@ -1632,6 +1632,12 @@
                                   }
                                 },
                                 "additionalProperties": false
+                              },
+                              "modelAliases": {
+                                "type": "object",
+                                "additionalProperties": {
+                                  "type": "string"
+                                }
                               }
                             },
                             "additionalProperties": false,
@@ -3732,6 +3738,12 @@
                                             }
                                           },
                                           "additionalProperties": false
+                                        },
+                                        "modelAliases": {
+                                          "type": "object",
+                                          "additionalProperties": {
+                                            "type": "string"
+                                          }
                                         }
                                       },
                                       "additionalProperties": false,
@@ -4721,6 +4733,12 @@
                                                         }
                                                       },
                                                       "additionalProperties": false
+                                                    },
+                                                    "modelAliases": {
+                                                      "type": "object",
+                                                      "additionalProperties": {
+                                                        "type": "string"
+                                                      }
                                                     }
                                                   },
                                                   "additionalProperties": false,
@@ -6103,6 +6121,12 @@
                       }
                     },
                     "additionalProperties": false
+                  },
+                  "modelAliases": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    }
                   }
                 },
                 "additionalProperties": false,
