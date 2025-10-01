@@ -1008,6 +1008,8 @@ pub enum Policy {
 	// Supported targets: Gateway < Route < RouteRule; single policy allowed
 	// Supported targets: Gateway < Route < RouteRule; single policy allowed
 	Transformation(crate::http::transformation_cel::Transformation),
+	// Supported targets: Gateway < Route < RouteRule; single policy allowed
+	Csrf(crate::http::csrf::Csrf),
 }
 
 #[apply(schema!)]

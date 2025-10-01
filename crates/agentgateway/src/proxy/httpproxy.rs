@@ -91,6 +91,13 @@ async fn apply_request_policies(
 			.map_err(|_| ProxyError::TransformationFailure)?;
 	}
 
+	if let Some(csrf) = &policies.csrf {
+		csrf
+			.apply(req)
+			.map_err(|_| ProxyError::CsrfValidationFailed)?
+			.apply(response_policies.headers())?;
+	}
+
 	Ok(())
 }
 
