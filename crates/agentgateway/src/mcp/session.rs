@@ -5,14 +5,13 @@ use std::sync::Arc;
 use ::http::StatusCode;
 use ::http::header::CONTENT_TYPE;
 use ::http::request::Parts;
-use agent_core::metrics::Recorder;
 use agent_core::version::BuildInfo;
 use anyhow::anyhow;
 use futures_util::StreamExt;
 use rmcp::ErrorData;
 use rmcp::model::{
-	ClientInfo, ClientJsonRpcMessage, ClientRequest, ErrorCode, Implementation, JsonRpcError,
-	ProtocolVersion, RequestId, ServerJsonRpcMessage,
+	ClientInfo, ClientJsonRpcMessage, ClientNotification, ClientRequest, ConstString, ErrorCode,
+	Implementation, JsonRpcError, ProtocolVersion, RequestId, ServerJsonRpcMessage,
 };
 use rmcp::transport::common::http_header::{EVENT_STREAM_MIME_TYPE, JSON_MIME_TYPE};
 use rmcp::transport::common::server_side_http::{ServerSseMessage, session_id};
@@ -24,7 +23,7 @@ use crate::http::Response;
 use crate::mcp::handler::Relay;
 use crate::mcp::mergestream::Messages;
 use crate::mcp::upstream::{IncomingRequestContext, UpstreamError};
-use crate::mcp::{ClientError, rbac};
+use crate::mcp::{ClientError, MCPOperation, rbac};
 use crate::{mcp, *};
 
 #[derive(Debug, Clone)]
@@ -194,7 +193,9 @@ impl Session {
 			ClientJsonRpcMessage::Request(mut r) => {
 				let method = r.request.method();
 				let (_span, log, cel) = mcp::handler::setup_request_log(&parts, method);
-
+				log.non_atomic_mutate(|l| {
+					l.method_name = Some(method.to_string());
+				});
 				let ctx = IncomingRequestContext::new(parts);
 				match &mut r.request {
 					ClientRequest::InitializeRequest(_) => {
@@ -204,6 +205,9 @@ impl Session {
 							.await
 					},
 					ClientRequest::ListToolsRequest(_) => {
+						log.non_atomic_mutate(|l| {
+							l.resource = Some(MCPOperation::Tool);
+						});
 						self
 							.relay
 							.send_fanout(r, ctx, self.relay.merge_tools(cel.clone()))
@@ -216,6 +220,9 @@ impl Session {
 							.await
 					},
 					ClientRequest::ListPromptsRequest(_) => {
+						log.non_atomic_mutate(|l| {
+							l.resource = Some(MCPOperation::Prompt);
+						});
 						self
 							.relay
 							.send_fanout(r, ctx, self.relay.merge_prompts(cel.clone()))
@@ -223,6 +230,9 @@ impl Session {
 					},
 					ClientRequest::ListResourcesRequest(_) => {
 						if !self.relay.is_multiplexing() {
+							log.non_atomic_mutate(|l| {
+								l.resource = Some(MCPOperation::Resource);
+							});
 							self
 								.relay
 								.send_fanout(r, ctx, self.relay.merge_resources(cel.clone()))
@@ -237,6 +247,9 @@ impl Session {
 					},
 					ClientRequest::ListResourceTemplatesRequest(_) => {
 						if !self.relay.is_multiplexing() {
+							log.non_atomic_mutate(|l| {
+								l.resource = Some(MCPOperation::ResourceTemplates);
+							});
 							self
 								.relay
 								.send_fanout(r, ctx, self.relay.merge_resource_templates(cel.clone()))
@@ -253,8 +266,9 @@ impl Session {
 						let name = ctr.params.name.clone();
 						let (service_name, tool) = self.relay.parse_resource_name(&name)?;
 						log.non_atomic_mutate(|l| {
-							l.tool_call_name = Some(tool.to_string());
+							l.resource_name = Some(tool.to_string());
 							l.target_name = Some(service_name.to_string());
+							l.resource = Some(MCPOperation::Tool);
 						});
 						if !self.relay.policies.validate(
 							&rbac::ResourceType::Tool(rbac::ResourceId::new(
@@ -266,14 +280,6 @@ impl Session {
 							return Err(UpstreamError::Authorization);
 						}
 
-						self.relay.metrics.record(
-							crate::mcp::metrics::ToolCall {
-								server: service_name.to_string(),
-								name: tool.to_string(),
-								params: vec![],
-							},
-							(),
-						);
 						let tn = tool.to_string();
 						ctr.params.name = tn.into();
 						self.relay.send_single(r, ctx, service_name).await
@@ -283,6 +289,8 @@ impl Session {
 						let (service_name, prompt) = self.relay.parse_resource_name(&name)?;
 						log.non_atomic_mutate(|l| {
 							l.target_name = Some(service_name.to_string());
+							l.resource_name = Some(prompt.to_string());
+							l.resource = Some(MCPOperation::Prompt);
 						});
 						if !self.relay.policies.validate(
 							&rbac::ResourceType::Prompt(rbac::ResourceId::new(
@@ -301,6 +309,8 @@ impl Session {
 							let uri = rrr.params.uri.clone();
 							log.non_atomic_mutate(|l| {
 								l.target_name = Some(service_name.to_string());
+								l.resource_name = Some(uri.to_string());
+								l.resource = Some(MCPOperation::Resource);
 							});
 							if !self.relay.policies.validate(
 								&rbac::ResourceType::Resource(rbac::ResourceId::new(
@@ -332,6 +342,16 @@ impl Session {
 				}
 			},
 			ClientJsonRpcMessage::Notification(r) => {
+				let method = match &r.notification {
+					ClientNotification::CancelledNotification(r) => r.method.as_str(),
+					ClientNotification::ProgressNotification(r) => r.method.as_str(),
+					ClientNotification::InitializedNotification(r) => r.method.as_str(),
+					ClientNotification::RootsListChangedNotification(r) => r.method.as_str(),
+				};
+				let (_span, log, _cel) = mcp::handler::setup_request_log(&parts, method);
+				log.non_atomic_mutate(|l| {
+					l.method_name = Some(method.to_string());
+				});
 				let ctx = IncomingRequestContext::new(parts);
 				// TODO: the notification needs to be fanned out in some cases and sent to a single one in others
 				// however, we don't have a way to map to the correct service yet

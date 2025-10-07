@@ -6,20 +6,12 @@ use std::sync::Arc;
 use std::task::{Context, Poll, ready};
 use std::time::{Duration, Instant};
 
-use agent_core::metrics::CustomField;
-use agent_core::strng;
-use agent_core::telemetry::{OptionExt, ValueBag, debug, display};
-use crossbeam::atomic::AtomicCell;
-use frozen_collections::{FzHashSet, FzStringMap};
-use http_body::{Body, Frame, SizeHint};
-use itertools::Itertools;
-use serde::{Serialize, Serializer};
-use serde_json::Value;
-use tracing::{Level, trace};
-
 use crate::cel::{ContextBuilder, Expression};
+use crate::llm::LLMInfo;
 use crate::proxy::ProxyResponseReason;
-use crate::telemetry::metrics::{GenAILabels, GenAILabelsTokenUsage, HTTPLabels, Metrics};
+use crate::telemetry::metrics::{
+	GenAILabels, GenAILabelsTokenUsage, HTTPLabels, MCPCall, Metrics, RouteIdentifier,
+};
 use crate::telemetry::trc;
 use crate::telemetry::trc::TraceParent;
 use crate::transport::stream::{TCPConnectionInfo, TLSConnectionInfo};
@@ -28,6 +20,17 @@ use crate::types::agent::{
 };
 use crate::types::loadbalancer::ActiveHandle;
 use crate::{cel, llm, mcp};
+use agent_core::metrics::CustomField;
+use agent_core::strng;
+use agent_core::strng::RichStrng;
+use agent_core::telemetry::{OptionExt, ValueBag, debug, display};
+use crossbeam::atomic::AtomicCell;
+use frozen_collections::{FzHashSet, FzStringMap};
+use http_body::{Body, Frame, SizeHint};
+use itertools::Itertools;
+use serde::{Serialize, Serializer};
+use serde_json::Value;
+use tracing::{Level, trace};
 
 /// AsyncLog is a wrapper around an item that can be atomically set.
 /// The intent is to provide additional info to the log after we have lost the RequestLog reference,
@@ -365,6 +368,71 @@ impl DropOnLog {
 			f(l)
 		}
 	}
+
+	fn add_llm_metrics(
+		log: &RequestLog,
+		route_identifier: &RouteIdentifier,
+		end_time: Instant,
+		duration: Duration,
+		llm_response: &Option<LLMInfo>,
+		custom_metric_fields: &CustomField,
+	) {
+		if let Some(llm_response) = &llm_response {
+			let gen_ai_labels = Arc::new(GenAILabels {
+				gen_ai_operation_name: strng::literal!("chat").into(),
+				gen_ai_system: llm_response.request.provider.clone().into(),
+				gen_ai_request_model: llm_response.request.request_model.clone().into(),
+				gen_ai_response_model: llm_response.response.provider_model.clone().into(),
+				custom: custom_metric_fields.clone(),
+				route: route_identifier.clone(),
+			});
+			if let Some(it) = llm_response.input_tokens() {
+				log
+					.metrics
+					.gen_ai_token_usage
+					.get_or_create(&GenAILabelsTokenUsage {
+						gen_ai_token_type: strng::literal!("input").into(),
+						common: gen_ai_labels.clone().into(),
+					})
+					.observe(it as f64)
+			}
+			if let Some(ot) = llm_response.response.output_tokens {
+				log
+					.metrics
+					.gen_ai_token_usage
+					.get_or_create(&GenAILabelsTokenUsage {
+						gen_ai_token_type: strng::literal!("output").into(),
+						common: gen_ai_labels.clone().into(),
+					})
+					.observe(ot as f64)
+			}
+			log
+				.metrics
+				.gen_ai_request_duration
+				.get_or_create(&gen_ai_labels)
+				.observe(duration.as_secs_f64());
+			if let Some(ft) = llm_response.response.first_token {
+				let ttft = ft - log.start;
+				// Duration from start of request to first token
+				// This is the start of when WE got the request, but it should probably be when we SENT the upstream.
+				log
+					.metrics
+					.gen_ai_time_to_first_token
+					.get_or_create(&gen_ai_labels)
+					.observe(ttft.as_secs_f64());
+
+				if let Some(ot) = llm_response.response.output_tokens {
+					let first_to_last = end_time - ft;
+					let throughput = first_to_last.as_secs_f64() / (ot as f64);
+					log
+						.metrics
+						.gen_ai_time_per_output_token
+						.get_or_create(&gen_ai_labels)
+						.observe(throughput);
+				}
+			}
+		}
+	}
 }
 
 impl From<RequestLog> for DropOnLog {
@@ -502,13 +570,17 @@ impl Drop for DropOnLog {
 			return;
 		};
 
-		let mut http_labels = HTTPLabels {
+		let route_identifier = RouteIdentifier {
 			bind: (&log.bind_name).into(),
 			gateway: (&log.gateway_name).into(),
 			listener: (&log.listener_name).into(),
 			route: (&log.route_name).into(),
 			route_rule: (&log.route_rule_name).into(),
+		};
+
+		let mut http_labels = HTTPLabels {
 			backend: (&log.backend_name).into(),
+			route: route_identifier.clone(),
 			method: log.method.clone().into(),
 			status: log.status.as_ref().map(|s| s.as_u16()).into(),
 			reason: log.reason.into(),
@@ -569,60 +641,32 @@ impl Drop for DropOnLog {
 		http_labels.custom = custom_metric_fields.clone();
 		log.metrics.requests.get_or_create(&http_labels).inc();
 
-		if let Some(llm_response) = &llm_response {
-			let gen_ai_labels = Arc::new(GenAILabels {
-				gen_ai_operation_name: strng::literal!("chat").into(),
-				// TODO: map this properly
-				gen_ai_system: llm_response.request.provider.clone().into(),
-				gen_ai_request_model: llm_response.request.request_model.clone().into(),
-				gen_ai_response_model: llm_response.response.provider_model.clone().into(),
-				custom: custom_metric_fields.clone(),
-			});
-			if let Some(it) = llm_response.input_tokens() {
-				log
-					.metrics
-					.gen_ai_token_usage
-					.get_or_create(&GenAILabelsTokenUsage {
-						gen_ai_token_type: strng::literal!("input").into(),
-						common: gen_ai_labels.clone().into(),
-					})
-					.observe(it as f64)
-			}
-			if let Some(ot) = llm_response.response.output_tokens {
-				log
-					.metrics
-					.gen_ai_token_usage
-					.get_or_create(&GenAILabelsTokenUsage {
-						gen_ai_token_type: strng::literal!("output").into(),
-						common: gen_ai_labels.clone().into(),
-					})
-					.observe(ot as f64)
-			}
+		Self::add_llm_metrics(
+			&log,
+			&route_identifier,
+			end_time,
+			duration,
+			&llm_response,
+			&custom_metric_fields,
+		);
+		let mcp = log.mcp_status.take();
+		if let Some(mcp) = &mcp
+			&& mcp.method_name.is_some()
+		{
+			// Check mcp.method_name is set, so we don't count things like GET and DELETE
 			log
 				.metrics
-				.gen_ai_request_duration
-				.get_or_create(&gen_ai_labels)
-				.observe(duration.as_secs_f64());
-			if let Some(ft) = llm_response.response.first_token {
-				let ttft = ft - log.start;
-				// Duration from start of request to first token
-				// This is the start of when WE got the request, but it should probably be when we SENT the upstream.
-				log
-					.metrics
-					.gen_ai_time_to_first_token
-					.get_or_create(&gen_ai_labels)
-					.observe(ttft.as_secs_f64());
+				.mcp_requests
+				.get_or_create(&MCPCall {
+					method: mcp.method_name.as_ref().map(RichStrng::from).into(),
+					resource_type: mcp.resource.into(),
+					server: mcp.target_name.as_ref().map(RichStrng::from).into(),
+					resource: mcp.resource_name.as_ref().map(RichStrng::from).into(),
 
-				if let Some(ot) = llm_response.response.output_tokens {
-					let first_to_last = end_time - ft;
-					let throughput = first_to_last.as_secs_f64() / (ot as f64);
-					log
-						.metrics
-						.gen_ai_time_per_output_token
-						.get_or_create(&gen_ai_labels)
-						.observe(throughput);
-				}
-			}
+					route: route_identifier.clone(),
+					custom: custom_metric_fields.clone(),
+				})
+				.inc();
 		}
 
 		let enable_logs = maybe_enable_log && cel_exec.eval_filter();
@@ -634,8 +678,6 @@ impl Drop for DropOnLog {
 		let grpc = log.grpc_status.load();
 
 		let input_tokens = llm_response.as_ref().and_then(|l| l.input_tokens());
-
-		let mcp = log.mcp_status.take();
 
 		let trace_id = log.outgoing_span.as_ref().map(|id| id.trace_id());
 		let span_id = log.outgoing_span.as_ref().map(|id| id.span_id());
@@ -664,6 +706,13 @@ impl Drop for DropOnLog {
 			("jwt.sub", log.jwt_sub.display()),
 			("a2a.method", log.a2a_method.display()),
 			(
+				"mcp.method",
+				mcp
+					.as_ref()
+					.and_then(|m| m.method_name.as_ref())
+					.map(display),
+			),
+			(
 				"mcp.target",
 				mcp
 					.as_ref()
@@ -671,10 +720,14 @@ impl Drop for DropOnLog {
 					.map(display),
 			),
 			(
-				"mcp.tool",
+				"mcp.resource",
+				mcp.as_ref().and_then(|m| m.resource.as_ref()).map(display),
+			),
+			(
+				"mcp.resource.name",
 				mcp
 					.as_ref()
-					.and_then(|m| m.tool_call_name.as_ref())
+					.and_then(|m| m.resource_name.as_ref())
 					.map(display),
 			),
 			(
