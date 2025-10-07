@@ -239,7 +239,7 @@ impl Gateway {
 			}
 		};
 
-		drain::run_with_drain(component, drain, max_deadline, accept).await;
+		drain::run_with_drain(component, drain, max_deadline, min_deadline, accept).await;
 		Ok(())
 	}
 
@@ -341,7 +341,7 @@ impl Gateway {
 		match res {
 			Ok(_) => Ok(()),
 			Err(e) => {
-				anyhow::bail!("{e}");
+				anyhow::bail!("{e:?}");
 			},
 		}
 	}
