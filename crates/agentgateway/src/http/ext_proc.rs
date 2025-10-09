@@ -1,6 +1,7 @@
 use std::convert::Infallible;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::http::HeaderOrPseudo;
 use ::http::HeaderMap;
 use anyhow::anyhow;
 use bytes::Bytes;
@@ -564,7 +565,7 @@ async fn handle_response_for_request_mutation(
 		},
 	};
 	if let Some(req) = req {
-		apply_header_mutations(req.headers_mut(), cr.header_mutation.as_ref())?;
+		apply_header_mutations_request(req, cr.header_mutation.as_ref())?;
 	}
 	if let Some(BodyMutation { mutation: Some(b) }) = cr.body_mutation {
 		match b {
@@ -616,6 +617,68 @@ fn apply_header_mutations(
 	Ok(())
 }
 
+fn apply_header_mutations_request(
+	req: &mut http::Request,
+	h: Option<&HeaderMutation>,
+) -> Result<(), Error> {
+	if let Some(hm) = h {
+		for rm in &hm.remove_headers {
+			req.headers_mut().remove(rm);
+		}
+		for set in &hm.set_headers {
+			let Some(h) = &set.header else { continue };
+			match HeaderOrPseudo::try_from(h.key.as_str()) {
+				Ok(HeaderOrPseudo::Header(hk)) => {
+					if hk == http::header::CONTENT_LENGTH {
+						debug!("skipping invalid content-length");
+						continue;
+					}
+					req
+						.headers_mut()
+						.insert(hk, HeaderValue::from_bytes(h.raw_value.as_slice())?);
+				},
+				Ok(pseudo) => {
+					let mut rr = crate::http::RequestOrResponse::Request(req);
+					let _ = crate::http::apply_pseudo(&mut rr, &pseudo, &h.raw_value);
+				},
+				Err(_) => {},
+			}
+		}
+	}
+	Ok(())
+}
+
+fn apply_header_mutations_response(
+	resp: &mut http::Response,
+	h: Option<&HeaderMutation>,
+) -> Result<(), Error> {
+	if let Some(hm) = h {
+		for rm in &hm.remove_headers {
+			resp.headers_mut().remove(rm);
+		}
+		for set in &hm.set_headers {
+			let Some(h) = &set.header else { continue };
+			match crate::http::HeaderOrPseudo::try_from(h.key.as_str()) {
+				Ok(crate::http::HeaderOrPseudo::Header(hk)) => {
+					if hk == http::header::CONTENT_LENGTH {
+						debug!("skipping invalid content-length");
+						continue;
+					}
+					resp
+						.headers_mut()
+						.insert(hk, HeaderValue::from_bytes(h.raw_value.as_slice())?);
+				},
+				Ok(pseudo) => {
+					let mut rr = crate::http::RequestOrResponse::Response(resp);
+					let _ = crate::http::apply_pseudo(&mut rr, &pseudo, &h.raw_value);
+				},
+				Err(_) => {},
+			}
+		}
+	}
+	Ok(())
+}
+
 // handle_response_for_response_mutation handles a single ext_proc response. If it returns 'true' we are done processing.
 async fn handle_response_for_response_mutation(
 	had_body: bool,
@@ -642,7 +705,7 @@ async fn handle_response_for_response_mutation(
 		},
 	};
 	if let Some(resp) = resp {
-		apply_header_mutations(resp.headers_mut(), cr.header_mutation.as_ref())?;
+		apply_header_mutations_response(resp, cr.header_mutation.as_ref())?;
 	}
 	if let Some(BodyMutation { mutation: Some(b) }) = cr.body_mutation {
 		match b {
@@ -669,17 +732,24 @@ async fn handle_response_for_response_mutation(
 }
 
 fn req_to_header_map(req: &http::Request) -> Option<proto::HeaderMap> {
+	let mut pseudo = crate::http::get_request_pseudo_headers(req);
+	let has_scheme = pseudo
+		.iter()
+		.any(|(p, _)| matches!(p, crate::http::HeaderOrPseudo::Scheme));
+	if !has_scheme {
+		// Default to http when scheme is not explicitly present on the request URI
+		pseudo.push((crate::http::HeaderOrPseudo::Scheme, "http".to_string()));
+	}
+	let pseudo_header_pairs: Vec<(String, String)> = pseudo
+		.into_iter()
+		.map(|(p, v)| (p.to_string(), v))
+		.collect();
 	to_header_map_extra(
 		req.headers(),
-		&[
-			(":path", req.uri().path()),
-			(":method", req.method().as_str()),
-			(":scheme", req.uri().scheme_str().unwrap_or("http")),
-			(
-				":authority",
-				req.uri().authority().map(|a| a.as_str()).unwrap_or(""),
-			),
-		],
+		&pseudo_header_pairs
+			.iter()
+			.map(|(k, v)| (k.as_str(), v.as_str()))
+			.collect::<Vec<_>>(),
 	)
 }
 
@@ -692,7 +762,7 @@ fn to_header_map(headers: &http::HeaderMap) -> Option<proto::HeaderMap> {
 }
 fn to_header_map_extra(
 	headers: &http::HeaderMap,
-	extra: &[(&str, &str)],
+	additional_headers: &[(&str, &str)],
 ) -> Option<proto::HeaderMap> {
 	let h = headers
 		.iter()
@@ -700,7 +770,7 @@ fn to_header_map_extra(
 			key: k.to_string(),
 			raw_value: v.as_bytes().to_vec(),
 		})
-		.chain(extra.iter().map(|(k, v)| proto::HeaderValue {
+		.chain(additional_headers.iter().map(|(k, v)| proto::HeaderValue {
 			key: k.to_string(),
 			raw_value: v.as_bytes().to_vec(),
 		}))

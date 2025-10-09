@@ -1,8 +1,7 @@
 use crate::cel::{Executor, Expression};
+use crate::http::HeaderOrPseudo;
 use crate::{cel, *};
 use ::http::StatusCode;
-use ::http::header::InvalidHeaderName;
-use ::http::uri::{Authority, PathAndQuery, Scheme};
 use ::http::{HeaderName, HeaderValue, header};
 use agent_core::prelude::Strng;
 use cel::Value;
@@ -114,47 +113,6 @@ impl Transformation {
 	}
 }
 
-#[derive(Debug)]
-pub enum HeaderOrPseudo {
-	Header(HeaderName),
-	Method,
-	Scheme,
-	Authority,
-	Path,
-	Status,
-}
-
-impl TryFrom<&str> for HeaderOrPseudo {
-	type Error = InvalidHeaderName;
-
-	fn try_from(value: &str) -> Result<Self, Self::Error> {
-		match value {
-			":method" => Ok(HeaderOrPseudo::Method),
-			":scheme" => Ok(HeaderOrPseudo::Scheme),
-			":authority" => Ok(HeaderOrPseudo::Authority),
-			":path" => Ok(HeaderOrPseudo::Path),
-			":status" => Ok(HeaderOrPseudo::Status),
-			_ => HeaderName::try_from(value).map(HeaderOrPseudo::Header),
-		}
-	}
-}
-
-impl Serialize for HeaderOrPseudo {
-	fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-	where
-		S: Serializer,
-	{
-		match self {
-			HeaderOrPseudo::Header(h) => h.as_str().serialize(serializer),
-			HeaderOrPseudo::Method => ":method".serialize(serializer),
-			HeaderOrPseudo::Scheme => ":scheme".serialize(serializer),
-			HeaderOrPseudo::Authority => ":authority".serialize(serializer),
-			HeaderOrPseudo::Path => ":path".serialize(serializer),
-			HeaderOrPseudo::Status => ":status".serialize(serializer),
-		}
-	}
-}
-
 #[serde_as]
 #[derive(Debug, Default, Serialize)]
 pub struct TransformerConfig {
@@ -255,38 +213,8 @@ impl<'a> RequestOrResponse<'a> {
 				if let RequestOrResponse::Request(r) = self
 					&& let Some(b) = cel::value_as_bytes(&v)
 				{
-					match k {
-						HeaderOrPseudo::Method => {
-							if let Ok(m) = http::Method::from_bytes(b) {
-								*r.method_mut() = m;
-							}
-						},
-						HeaderOrPseudo::Scheme => {
-							if let Ok(s) = Scheme::try_from(b) {
-								let _ = http::modify_req_uri(r, |uri| {
-									uri.scheme = Some(s);
-									Ok(())
-								});
-							}
-						},
-						HeaderOrPseudo::Authority => {
-							if let Ok(s) = Authority::try_from(b) {
-								let _ = http::modify_req_uri(r, |uri| {
-									uri.authority = Some(s);
-									Ok(())
-								});
-							}
-						},
-						HeaderOrPseudo::Path => {
-							if let Ok(s) = PathAndQuery::try_from(b) {
-								let _ = http::modify_req_uri(r, |uri| {
-									uri.path_and_query = Some(s);
-									Ok(())
-								});
-							}
-						},
-						_ => {},
-					}
+					let mut rr = crate::http::RequestOrResponse::Request(r);
+					let _ = crate::http::apply_pseudo(&mut rr, k, b);
 				}
 			},
 			_ => {},
