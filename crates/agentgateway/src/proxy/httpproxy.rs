@@ -354,6 +354,7 @@ impl HTTPProxy {
 		response_policies: &mut ResponsePolicies,
 	) -> Result<Response, ProxyResponse> {
 		log.tls_info = connection.get::<TLSConnectionInfo>().cloned();
+		log.backend_protocol = Some(cel::BackendProtocol::http);
 		let selected_listener = self.selected_listener.clone();
 		let inputs = self.inputs.clone();
 		let bind_name = self.bind_name.clone();
@@ -857,6 +858,12 @@ async fn make_backend_call(
 		},
 		_ => (backend, default_policies),
 	};
+	log.add(|l| {
+		l.backend_info = Some(backend.backend_info());
+		if let Some(bp) = backend.backend_protocol() {
+			l.backend_protocol = Some(bp)
+		}
+	});
 
 	let policies =
 		inputs
@@ -939,6 +946,7 @@ async fn make_backend_call(
 			let backend = backend.clone();
 			let name = name.clone();
 			let time = log.as_ref().unwrap().start_time.clone();
+			set_backend_cel_context(&mut log);
 			let mcp_response_log = log.map(|l| l.mcp_status.clone()).expect("must be set");
 			return Ok(Box::pin(async move {
 				inputs
@@ -962,7 +970,9 @@ async fn make_backend_call(
 		},
 		_ => {},
 	};
-	log.add(|l| l.endpoint = Some(backend_call.target.clone()));
+	log.add(|l| {
+		l.endpoint = Some(backend_call.target.clone());
+	});
 
 	let policies = match backend_call.default_policies.clone() {
 		Some(def) => def.merge(policies),
@@ -975,8 +985,19 @@ async fn make_backend_call(
 	auth::apply_backend_auth(&client, policies.backend_auth.as_ref(), &mut req).await?;
 	let a2a_type = a2a::apply_to_request(policies.a2a.as_ref(), &mut req).await;
 	if let a2a::RequestType::Call(method) = a2a_type {
-		log.add(|l| l.a2a_method = Some(method));
+		log.add(|l| {
+			l.a2a_method = Some(method);
+		});
 	}
+	if matches!(
+		a2a_type,
+		a2a::RequestType::Call(_) | a2a::RequestType::AgentCard(_)
+	) {
+		log.add(|l| {
+			l.backend_protocol = Some(cel::BackendProtocol::a2a);
+		});
+	}
+	set_backend_cel_context(&mut log);
 
 	let (mut req, response_policies, llm_request) = if let Some(llm) = &policies.llm_provider {
 		let route_type = llm.resolve_route(req.uri().path());
@@ -1101,6 +1122,16 @@ async fn make_backend_call(
 		let _ = maybe_inference.mutate_response(&mut resp).await?;
 		Ok(resp)
 	}))
+}
+
+fn set_backend_cel_context(log: &mut Option<&mut RequestLog>) {
+	log.add(|l| {
+		if let Some(bp) = l.backend_protocol
+			&& let Some(bi) = &l.backend_info
+		{
+			l.cel.ctx().with_backend(bi, bp)
+		}
+	});
 }
 
 pub fn build_service_call(

@@ -16,7 +16,7 @@ use crate::telemetry::trc;
 use crate::telemetry::trc::TraceParent;
 use crate::transport::stream::{TCPConnectionInfo, TLSConnectionInfo};
 use crate::types::agent::{
-	BackendName, BindName, GatewayName, ListenerName, RouteName, RouteRuleName, Target,
+	BackendInfo, BindName, GatewayName, ListenerName, RouteName, RouteRuleName, Target,
 };
 use crate::types::loadbalancer::ActiveHandle;
 use crate::{cel, llm, mcp};
@@ -463,7 +463,8 @@ impl RequestLog {
 			listener_name: None,
 			route_rule_name: None,
 			route_name: None,
-			backend_name: None,
+			backend_info: None,
+			backend_protocol: None,
 			host: None,
 			method: None,
 			path: None,
@@ -507,7 +508,8 @@ pub struct RequestLog {
 	pub listener_name: Option<ListenerName>,
 	pub route_rule_name: Option<RouteRuleName>,
 	pub route_name: Option<RouteName>,
-	pub backend_name: Option<BackendName>,
+	pub backend_info: Option<BackendInfo>,
+	pub backend_protocol: Option<cel::BackendProtocol>,
 
 	pub host: Option<String>,
 	pub method: Option<::http::Method>,
@@ -578,8 +580,15 @@ impl Drop for DropOnLog {
 			route_rule: (&log.route_rule_name).into(),
 		};
 
+		let is_tcp = matches!(&log.backend_protocol, &Some(cel::BackendProtocol::tcp));
+
 		let mut http_labels = HTTPLabels {
-			backend: (&log.backend_name).into(),
+			backend: log
+				.backend_info
+				.as_ref()
+				.map(|info| info.backend_name.clone())
+				.into(),
+			protocol: log.backend_protocol.into(),
 			route: route_identifier.clone(),
 			method: log.method.clone().into(),
 			status: log.status.as_ref().map(|s| s.as_u16()).into(),
@@ -594,7 +603,9 @@ impl Drop for DropOnLog {
 		let maybe_enable_log = agent_core::telemetry::enabled("request", &Level::INFO);
 		if !maybe_enable_log && !enable_trace && !enable_custom_metrics {
 			// Report our non-customized metrics
-			log.metrics.requests.get_or_create(&http_labels).inc();
+			if !is_tcp {
+				log.metrics.requests.get_or_create(&http_labels).inc();
+			}
 			return;
 		}
 
@@ -639,7 +650,9 @@ impl Drop for DropOnLog {
 				}),
 		);
 		http_labels.custom = custom_metric_fields.clone();
-		log.metrics.requests.get_or_create(&http_labels).inc();
+		if !is_tcp {
+			log.metrics.requests.get_or_create(&http_labels).inc();
+		}
 
 		Self::add_llm_metrics(
 			&log,
@@ -704,6 +717,7 @@ impl Drop for DropOnLog {
 			("trace.id", trace_id.display()),
 			("span.id", span_id.display()),
 			("jwt.sub", log.jwt_sub.display()),
+			("protocol", log.backend_protocol.as_ref().map(debug)),
 			("a2a.method", log.a2a_method.display()),
 			(
 				"mcp.method",

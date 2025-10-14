@@ -13,6 +13,7 @@ use cel::objects::Key;
 use cel::{Context, ExecutionError, ParseError, ParseErrors, Program};
 pub use functions::{FLATTEN_LIST, FLATTEN_LIST_RECURSIVE, FLATTEN_MAP, FLATTEN_MAP_RECURSIVE};
 use once_cell::sync::Lazy;
+use prometheus_client::encoding::EncodeLabelValue;
 use serde::{Serialize, Serializer};
 
 use crate::http::jwt::Claims;
@@ -20,6 +21,7 @@ use crate::llm;
 use crate::llm::{LLMInfo, LLMRequest};
 use crate::serdes::*;
 use crate::transport::stream::{TCPConnectionInfo, TLSConnectionInfo};
+use crate::types::agent::BackendInfo;
 use crate::types::discovery::Identity;
 
 mod functions;
@@ -49,6 +51,7 @@ pub const REQUEST_BODY_ATTRIBUTE: &str = "request.body";
 pub const LLM_ATTRIBUTE: &str = "llm";
 pub const LLM_PROMPT_ATTRIBUTE: &str = "llm.prompt";
 pub const LLM_COMPLETION_ATTRIBUTE: &str = "llm.completion";
+pub const BACKEND_ATTRIBUTE: &str = "backend";
 pub const RESPONSE_ATTRIBUTE: &str = "response";
 pub const RESPONSE_BODY_ATTRIBUTE: &str = "response.body";
 pub const JWT_ATTRIBUTE: &str = "jwt";
@@ -61,6 +64,7 @@ pub const ALL_ATTRIBUTES: &[&str] = &[
 	LLM_ATTRIBUTE,
 	LLM_PROMPT_ATTRIBUTE,
 	LLM_COMPLETION_ATTRIBUTE,
+	BACKEND_ATTRIBUTE,
 	RESPONSE_ATTRIBUTE,
 	RESPONSE_BODY_ATTRIBUTE,
 	JWT_ATTRIBUTE,
@@ -252,6 +256,17 @@ impl ContextBuilder {
 		r.prompt = Some(msg);
 	}
 
+	pub fn with_backend(&mut self, backend_info: &BackendInfo, backend_protocol: BackendProtocol) {
+		if !self.attributes.contains(BACKEND_ATTRIBUTE) {
+			return;
+		}
+		self.context.backend = Some(BackendContext {
+			name: backend_info.backend_name.clone(),
+			backend_type: backend_info.backend_type,
+			protocol: backend_protocol,
+		});
+	}
+
 	pub fn with_llm_response(&mut self, info: &LLMInfo) {
 		if !self.attributes.contains(LLM_ATTRIBUTE) {
 			return;
@@ -293,6 +308,7 @@ impl ContextBuilder {
 			llm,
 			source,
 			mcp: _,
+			backend,
 			extauthz,
 		} = &self.context;
 
@@ -300,6 +316,7 @@ impl ContextBuilder {
 		ctx.add_variable_from_value(RESPONSE_ATTRIBUTE, opt_to_value(response)?);
 		ctx.add_variable_from_value(JWT_ATTRIBUTE, opt_to_value(jwt)?);
 		ctx.add_variable_from_value(MCP_ATTRIBUTE, opt_to_value(&mcp)?);
+		ctx.add_variable_from_value(BACKEND_ATTRIBUTE, opt_to_value(backend)?);
 		ctx.add_variable_from_value(LLM_ATTRIBUTE, opt_to_value(llm)?);
 		ctx.add_variable_from_value(SOURCE_ATTRIBUTE, opt_to_value(source)?);
 		ctx.add_variable_from_value(EXTAUTHZ_ATTRIBUTE, opt_to_value(extauthz)?);
@@ -428,6 +445,8 @@ pub struct ExpressionContext {
 	/// `mcp` contains attributes about the MCP request.
 	// This is only included for schema generation; see build_with_mcp.
 	pub mcp: Option<crate::mcp::ResourceType>,
+	/// `backend` contains information about the backend being used.
+	pub backend: Option<BackendContext>,
 	/// `extauthz` contains dynamic metadata from ext_authz filters
 	pub extauthz: Option<std::collections::HashMap<String, serde_json::Value>>,
 }
@@ -502,6 +521,40 @@ pub struct IdentityContext {
 	namespace: Strng,
 	/// The service account of the identity.
 	service_account: Strng,
+}
+
+#[apply(schema_ser!)]
+pub struct BackendContext {
+	/// The name of the backend being used. For example, `my-service` or `service/my-namespace/my-service:8080`.
+	pub name: Strng,
+	/// The type of backend. For example, `ai`, `mcp`, `static`, `dynamic`, or `service`.
+	#[serde(rename = "type")]
+	pub backend_type: BackendType,
+	/// The protocol of backend. For example, `http`, `tcp`, `a2a`, `mcp`, or `llm`.
+	pub protocol: BackendProtocol,
+}
+
+#[derive(Copy, PartialEq, Eq, Hash, Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "lowercase", deny_unknown_fields)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+pub enum BackendType {
+	AI,
+	MCP,
+	Static,
+	Dynamic,
+	Service,
+	Unknown,
+}
+
+#[derive(Copy, PartialEq, Eq, Hash, EncodeLabelValue, Debug, Clone, serde::Serialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[allow(non_camel_case_types)]
+pub enum BackendProtocol {
+	http,
+	tcp,
+	a2a,
+	mcp,
+	llm,
 }
 
 #[apply(schema_ser!)]

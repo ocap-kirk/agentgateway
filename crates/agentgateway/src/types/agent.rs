@@ -426,6 +426,21 @@ impl SimpleBackend {
 			SimpleBackend::Invalid => strng::format!("invalid"),
 		}
 	}
+
+	pub fn backend_type(&self) -> cel::BackendType {
+		match self {
+			SimpleBackend::Service(_, _) => cel::BackendType::Service,
+			SimpleBackend::Opaque(_, _) => cel::BackendType::Static,
+			SimpleBackend::Invalid => cel::BackendType::Unknown,
+		}
+	}
+
+	pub fn backend_info(&self) -> BackendInfo {
+		BackendInfo {
+			backend_type: self.backend_type(),
+			backend_name: self.name(),
+		}
+	}
 }
 
 impl BackendReference {
@@ -453,6 +468,38 @@ impl Backend {
 			Backend::Invalid => strng::format!("invalid"),
 		}
 	}
+
+	pub fn backend_type(&self) -> cel::BackendType {
+		match self {
+			Backend::Service(_, _) => cel::BackendType::Service,
+			Backend::Opaque(_, _) => cel::BackendType::Static,
+			Backend::MCP(_, _) => cel::BackendType::MCP,
+			Backend::AI(_, _) => cel::BackendType::AI,
+			Backend::Dynamic { .. } => cel::BackendType::Dynamic,
+			Backend::Invalid => cel::BackendType::Unknown,
+		}
+	}
+
+	pub fn backend_protocol(&self) -> Option<cel::BackendProtocol> {
+		match self {
+			Backend::MCP(_, _) => Some(cel::BackendProtocol::mcp),
+			Backend::AI(_, _) => Some(cel::BackendProtocol::llm),
+			_ => None,
+		}
+	}
+
+	pub fn backend_info(&self) -> BackendInfo {
+		BackendInfo {
+			backend_type: self.backend_type(),
+			backend_name: self.name(),
+		}
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct BackendInfo {
+	pub backend_type: cel::BackendType,
+	pub backend_name: BackendName,
 }
 
 pub type BackendName = Strng;
@@ -1189,6 +1236,29 @@ impl Display for Target {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn test_backend_type_categorization() {
+		let opaque_backend = Backend::Opaque(
+			strng::new("test-opaque"),
+			crate::types::agent::Target::Hostname(strng::new("example.com"), 443),
+		);
+		assert_eq!(opaque_backend.backend_type(), cel::BackendType::Static);
+		assert_eq!(
+			opaque_backend.backend_info().backend_type,
+			cel::BackendType::Static
+		);
+
+		let invalid_backend = Backend::Invalid;
+		assert_eq!(invalid_backend.backend_type(), cel::BackendType::Unknown);
+		assert_eq!(
+			invalid_backend.backend_info().backend_type,
+			cel::BackendType::Unknown
+		);
+
+		let info = opaque_backend.backend_info();
+		assert_eq!(info.backend_name, strng::new("test-opaque"));
+	}
 
 	#[test]
 	fn test_parse_key_ec_p256() {
