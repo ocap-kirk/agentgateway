@@ -2473,6 +2473,41 @@
                                     "format": "uint16",
                                     "minimum": 0,
                                     "maximum": 65535
+                                  },
+                                  "includeRequestHeaders": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "includeRequestBody": {
+                                    "type": [
+                                      "object",
+                                      "null"
+                                    ],
+                                    "properties": {
+                                      "maxRequestBytes": {
+                                        "type": "integer",
+                                        "format": "uint32",
+                                        "minimum": 0,
+                                        "default": 0
+                                      },
+                                      "allowPartialMessage": {
+                                        "type": "boolean",
+                                        "default": false
+                                      },
+                                      "packAsBytes": {
+                                        "type": "boolean",
+                                        "default": false
+                                      }
+                                    },
+                                    "additionalProperties": false
+                                  },
+                                  "timeout": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
                                   }
                                 },
                                 "unevaluatedProperties": false,
@@ -7123,6 +7158,41 @@
                         "format": "uint16",
                         "minimum": 0,
                         "maximum": 65535
+                      },
+                      "includeRequestHeaders": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "includeRequestBody": {
+                        "type": [
+                          "object",
+                          "null"
+                        ],
+                        "properties": {
+                          "maxRequestBytes": {
+                            "type": "integer",
+                            "format": "uint32",
+                            "minimum": 0,
+                            "default": 0
+                          },
+                          "allowPartialMessage": {
+                            "type": "boolean",
+                            "default": false
+                          },
+                          "packAsBytes": {
+                            "type": "boolean",
+                            "default": false
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      "timeout": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
                       }
                     },
                     "unevaluatedProperties": false,

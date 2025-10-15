@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use ::http::Uri;
 use agent_core::prelude::Strng;
@@ -1044,13 +1045,20 @@ async fn split_policies(
 			(None, Some(code)) => crate::http::ext_authz::FailureMode::DenyWithStatus(code),
 		};
 
+		// Convert header strings to HeaderOrPseudo
+		let include_request_headers: Vec<crate::http::HeaderOrPseudo> = p
+			.include_request_headers
+			.iter()
+			.filter_map(|s| crate::http::HeaderOrPseudo::try_from(s.as_str()).ok())
+			.collect();
+
 		let pol = http::ext_authz::ExtAuthz {
 			target: Arc::new(bref),
 			context: p.context,
 			failure_mode,
-			include_request_headers: vec![],
-			include_request_body: None,
-			timeout: None,
+			include_request_headers,
+			include_request_body: p.include_request_body.map(|b| b.into()),
+			timeout: p.timeout,
 		};
 		backend
 			.into_iter()
@@ -1215,6 +1223,26 @@ pub struct LocalRequestMirror {
 }
 
 #[apply(schema_de!)]
+pub struct LocalBodyOptions {
+	#[serde(default)]
+	pub max_request_bytes: u32,
+	#[serde(default)]
+	pub allow_partial_message: bool,
+	#[serde(default)]
+	pub pack_as_bytes: bool,
+}
+
+impl From<LocalBodyOptions> for crate::http::ext_authz::BodyOptions {
+	fn from(val: LocalBodyOptions) -> Self {
+		crate::http::ext_authz::BodyOptions {
+			max_request_bytes: val.max_request_bytes,
+			allow_partial_message: val.allow_partial_message,
+			pack_as_bytes: val.pack_as_bytes,
+		}
+	}
+}
+
+#[apply(schema_de!)]
 pub struct LocalExtAuthz {
 	#[serde(flatten)]
 	pub target: SimpleLocalBackend,
@@ -1225,6 +1253,14 @@ pub struct LocalExtAuthz {
 	pub fail_open: Option<bool>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub status_on_error: Option<u16>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub include_request_headers: Vec<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub include_request_body: Option<LocalBodyOptions>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	#[serde(with = "serde_dur_option")]
+	#[cfg_attr(feature = "schema", schemars(with = "Option<String>"))]
+	pub timeout: Option<Duration>,
 }
 
 #[apply(schema_de!)]

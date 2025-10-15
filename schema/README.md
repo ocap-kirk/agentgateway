@@ -285,6 +285,12 @@ This folder contains JSON schemas for various parts of the project
 |`binds[].listeners[].routes[].policies.extAuthz.(any)context`||
 |`binds[].listeners[].routes[].policies.extAuthz.(any)failOpen`||
 |`binds[].listeners[].routes[].policies.extAuthz.(any)statusOnError`||
+|`binds[].listeners[].routes[].policies.extAuthz.(any)includeRequestHeaders`||
+|`binds[].listeners[].routes[].policies.extAuthz.(any)includeRequestBody`||
+|`binds[].listeners[].routes[].policies.extAuthz.(any)includeRequestBody.maxRequestBytes`||
+|`binds[].listeners[].routes[].policies.extAuthz.(any)includeRequestBody.allowPartialMessage`||
+|`binds[].listeners[].routes[].policies.extAuthz.(any)includeRequestBody.packAsBytes`||
+|`binds[].listeners[].routes[].policies.extAuthz.(any)timeout`||
 |`binds[].listeners[].routes[].policies.extProc`|Extend agentgateway with an external processor|
 |`binds[].listeners[].routes[].policies.extProc.(any)(1)service`||
 |`binds[].listeners[].routes[].policies.extProc.(any)(1)service.name`||
@@ -782,6 +788,12 @@ This folder contains JSON schemas for various parts of the project
 |`policies[].policy.extAuthz.(any)context`||
 |`policies[].policy.extAuthz.(any)failOpen`||
 |`policies[].policy.extAuthz.(any)statusOnError`||
+|`policies[].policy.extAuthz.(any)includeRequestHeaders`||
+|`policies[].policy.extAuthz.(any)includeRequestBody`||
+|`policies[].policy.extAuthz.(any)includeRequestBody.maxRequestBytes`||
+|`policies[].policy.extAuthz.(any)includeRequestBody.allowPartialMessage`||
+|`policies[].policy.extAuthz.(any)includeRequestBody.packAsBytes`||
+|`policies[].policy.extAuthz.(any)timeout`||
 |`policies[].policy.extProc`|Extend agentgateway with an external processor|
 |`policies[].policy.extProc.(any)(1)service`||
 |`policies[].policy.extProc.(any)(1)service.name`||
