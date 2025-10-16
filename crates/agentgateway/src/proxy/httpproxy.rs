@@ -472,6 +472,12 @@ impl HTTPProxy {
 		.ok_or(ProxyError::RouteNotFound)?;
 		log.route_rule_name = selected_route.rule_name.clone();
 		log.route_name = Some(selected_route.route_name.clone());
+		// Record the matched path for tracing/logging span names
+		log.path_match = Some(match &path_match {
+			crate::types::agent::PathMatch::Exact(p) => p.to_string(),
+			crate::types::agent::PathMatch::PathPrefix(p) => format!("{}/*", p),
+			crate::types::agent::PathMatch::Regex(r, _) => r.as_str().to_string(),
+		});
 
 		debug!(bind=%bind_name, listener=%selected_listener.key, route=%selected_route.key, "selected route");
 
@@ -532,6 +538,11 @@ impl HTTPProxy {
 		let selected_backend =
 			select_backend(selected_route.as_ref(), &req).ok_or(ProxyError::NoValidBackends)?;
 		let selected_backend = resolve_backend(selected_backend, self.inputs.as_ref())?;
+		// Set backend info as soon as we have resolved to add the metric labels
+		log.backend_info = Some(selected_backend.backend.backend_info());
+		if let Some(bp) = selected_backend.backend.backend_protocol() {
+			log.backend_protocol = Some(bp)
+		}
 		response_policies.backend_filters = selected_backend
 			.filters
 			.iter()

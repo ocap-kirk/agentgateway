@@ -1,3 +1,4 @@
+use std::env;
 use std::fmt::Debug;
 
 use crate::mcp::MCPOperation;
@@ -11,7 +12,9 @@ use prometheus_client::metrics::counter;
 use prometheus_client::metrics::family::Family;
 use prometheus_client::metrics::histogram::Histogram as PromHistogram;
 use prometheus_client::metrics::info::Info;
-use prometheus_client::registry::Registry;
+use prometheus_client::registry::{Registry, Unit};
+
+const ENV_ENABLE_CONNECT_DURATION_METRICS: &str = "ENABLE_CONNECT_DURATION_METRICS";
 
 #[derive(Clone, Hash, Default, Debug, PartialEq, Eq, EncodeLabelSet)]
 pub struct RouteIdentifier {
@@ -83,6 +86,11 @@ pub struct TCPLabels {
 	pub protocol: BindProtocol,
 }
 
+#[derive(Clone, Hash, Debug, PartialEq, Eq, EncodeLabelSet)]
+pub struct ConnectLabels {
+	pub transport: DefaultedUnknown<RichStrng>,
+}
+
 type Counter = Family<HTTPLabels, counter::Counter>;
 type Histogram<T> = Family<T, prometheus_client::metrics::histogram::Histogram>;
 type TCPCounter = Family<TCPLabels, counter::Counter>;
@@ -103,6 +111,17 @@ pub struct Metrics {
 	pub gen_ai_request_duration: Histogram<GenAILabels>,
 	pub gen_ai_time_per_output_token: Histogram<GenAILabels>,
 	pub gen_ai_time_to_first_token: Histogram<GenAILabels>,
+
+	pub response_bytes: Family<HTTPLabels, counter::Counter>,
+
+	pub tcp_downstream_rx_bytes: Family<TCPLabels, counter::Counter>,
+	pub tcp_downstream_tx_bytes: Family<TCPLabels, counter::Counter>,
+
+	pub upstream_connect_duration: Histogram<ConnectLabels>,
+	pub tls_handshake_duration: Histogram<TCPLabels>,
+
+	// Feature flag controlling emission of connect/tls duration histograms
+	pub enable_connect_duration_metrics: bool,
 }
 
 impl Metrics {
@@ -170,6 +189,65 @@ impl Metrics {
 			gen_ai_request_duration,
 			gen_ai_time_per_output_token,
 			gen_ai_time_to_first_token,
+
+			response_bytes: {
+				let m = Family::<HTTPLabels, _>::default();
+				registry.register_with_unit(
+					"response",
+					"Total HTTP response bytes received",
+					Unit::Bytes,
+					m.clone(),
+				);
+				m
+			},
+			tcp_downstream_rx_bytes: {
+				let m = Family::<TCPLabels, _>::default();
+				registry.register_with_unit(
+					"downstream_received",
+					"Total TCP bytes received per connection labels",
+					Unit::Bytes,
+					m.clone(),
+				);
+				m
+			},
+			tcp_downstream_tx_bytes: {
+				let m = Family::<TCPLabels, _>::default();
+				registry.register_with_unit(
+					"downstream_sent",
+					"Total TCP bytes transmitted per connection labels",
+					Unit::Bytes,
+					m.clone(),
+				);
+				m
+			},
+			upstream_connect_duration: {
+				let m = Family::<ConnectLabels, _>::new_with_constructor(move || {
+					PromHistogram::new(CONNECT_DURATION_BUCKET)
+				});
+				registry.register_with_unit(
+					"upstream_connect_duration",
+					"Duration to establish upstream connection (seconds)",
+					Unit::Seconds,
+					m.clone(),
+				);
+				m
+			},
+			tls_handshake_duration: {
+				let m = Family::<TCPLabels, _>::new_with_constructor(move || {
+					PromHistogram::new(CONNECT_DURATION_BUCKET)
+				});
+				registry.register_with_unit(
+					"tls_handshake_duration",
+					"Duration to complete inbound TLS/HTTPS handshake (seconds)",
+					Unit::Seconds,
+					m.clone(),
+				);
+				m
+			},
+			enable_connect_duration_metrics: match env::var(ENV_ENABLE_CONNECT_DURATION_METRICS) {
+				Ok(v) => matches!(v.as_str(), "1" | "true" | "TRUE" | "True"),
+				Err(_) => false,
+			},
 		}
 	}
 }
@@ -192,6 +270,20 @@ const TOKEN_USAGE_BUCKET: [f64; 14] = [
 // https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-metrics/#metric-gen_aiserverrequestduration
 const REQUEST_DURATION_BUCKET: [f64; 14] = [
 	0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56, 5.12, 10.24, 20.48, 40.96, 81.92,
+];
+// Finer-grained, exponentially growing buckets for TCP/TLS connect.
+// Keep in seconds (Prometheus convention). Prioritize sub-second resolution, with a few larger outlier buckets.
+const CONNECT_DURATION_BUCKET: [f64; 10] = [
+	0.0005, // 0.5 ms
+	0.0015, // 1.5 ms
+	0.0043, // 4.3 ms
+	0.0126, // 12.6 ms
+	0.0368, // 36.8 ms
+	0.108,  // 108 ms
+	0.316,  // 316 ms
+	0.924,  // 924 ms
+	2.71,   // 2.71 s
+	8.0,    // 8 s
 ];
 // https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-metrics/#metric-gen_aiservertime_per_output_token
 // NOTE: the spec has SHOULD, but is not smart enough to handle the faster LLMs.

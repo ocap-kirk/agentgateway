@@ -135,7 +135,12 @@ impl Gateway {
 		let name = b.key.clone();
 		let (pi, listener) = if pi.cfg.threading_mode == crate::ThreadingMode::ThreadPerCore {
 			let mut pi = Arc::unwrap_or_clone(pi);
-			let client = client::Client::new(&pi.cfg.dns, None, pi.cfg.backend.clone());
+			let client = client::Client::new(
+				&pi.cfg.dns,
+				None,
+				pi.cfg.backend.clone(),
+				Some(pi.metrics.clone()),
+			);
 			pi.upstream = client;
 			let pi = Arc::new(pi);
 			let builder = if b.address.is_ipv4() {
@@ -320,6 +325,20 @@ impl Gateway {
 				},
 			})
 			.inc();
+
+		// Precompute transport labels and metrics before moving `selected_listener` and `inputs`
+		let transport_protocol = if stream.ext::<TLSConnectionInfo>().is_some() {
+			BindProtocol::https
+		} else {
+			BindProtocol::http
+		};
+		let transport_labels = TCPLabels {
+			bind: Some(&bind_name).into(),
+			gateway: selected_listener.as_ref().map(|l| &l.gateway_name).into(),
+			listener: selected_listener.as_ref().map(|l| &l.name).into(),
+			protocol: transport_protocol,
+		};
+		let transport_metrics = inputs.metrics.clone();
 		let proxy = super::httpproxy::HTTPProxy {
 			bind_name,
 			inputs,
@@ -327,6 +346,9 @@ impl Gateway {
 			target_address,
 		};
 		let connection = Arc::new(stream.get_ext());
+		// export rx/tx bytes on drop
+		let mut stream = stream;
+		stream.set_transport_metrics(transport_metrics, transport_labels);
 
 		let serve = server.serve_connection_with_upgrades(
 			TokioIo::new(stream),
@@ -395,6 +417,7 @@ impl Gateway {
 			let (ext, counter, inner) = raw_stream.into_parts();
 			let acceptor =
 				tokio_rustls::LazyConfigAcceptor::new(rustls::server::Acceptor::default(), Box::new(inner));
+			let tls_start = std::time::Instant::now();
 			let start = acceptor.await?;
 			let ch = start.client_hello();
 			let best = listeners
@@ -402,6 +425,25 @@ impl Gateway {
 				.ok_or(anyhow!("no TLS listener match"))?;
 			let cfg = best.protocol.tls().unwrap();
 			let tls = start.into_stream(cfg).await?;
+			let tls_dur = tls_start.elapsed();
+			// TLS handshake duration
+			let protocol = if matches!(best.protocol, ListenerProtocol::HTTPS(_)) {
+				BindProtocol::https
+			} else {
+				BindProtocol::tls
+			};
+			if inp.metrics.enable_connect_duration_metrics {
+				inp
+					.metrics
+					.tls_handshake_duration
+					.get_or_create(&TCPLabels {
+						bind: Some(&bind).into(),
+						gateway: Some(&best.gateway_name).into(),
+						listener: Some(&best.name).into(),
+						protocol,
+					})
+					.observe(tls_dur.as_secs_f64());
+			}
 			Ok((best, Socket::from_tls(ext, counter, tls.into())?))
 		};
 		tokio::time::timeout(to, handshake).await?
