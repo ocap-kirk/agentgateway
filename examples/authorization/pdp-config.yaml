@@ -1,0 +1,34 @@
+# yaml-language-server: $schema=../../schema/local.json
+binds:
+- port: 3000
+  listeners:
+  - routes:
+    - policies:
+        cors:
+          allowOrigins:
+            - "*"
+          allowHeaders:
+            - mcp-protocol-version
+            - content-type
+            - cache-control
+            - accept
+            - authorization
+          allowMethods:
+            - GET
+            - POST
+            - OPTIONS
+        extAuthz:
+          host: localhost:8042
+          context:
+            authorization: Bearer abc123
+          includeRequestBody:
+            maxRequestBytes: 8192
+            packAsBytes: true
+            allowPartialMessage: false
+      backends:
+      - mcp:
+          targets:
+          - name: everything
+            stdio:
+              cmd: npx
+              args: ["@modelcontextprotocol/server-everything"]
