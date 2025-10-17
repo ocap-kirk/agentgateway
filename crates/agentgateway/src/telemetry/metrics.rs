@@ -1,17 +1,18 @@
-use std::fmt::Debug;
-
 use crate::mcp::MCPOperation;
 use crate::proxy::ProxyResponseReason;
 use crate::types::agent::BindProtocol;
 use agent_core::metrics::{CustomField, DefaultedUnknown, EncodeArc, EncodeDebug, EncodeDisplay};
 use agent_core::strng::RichStrng;
 use agent_core::version;
+use frozen_collections::FzHashSet;
 use prometheus_client::encoding::EncodeLabelSet;
 use prometheus_client::metrics::counter;
 use prometheus_client::metrics::family::Family;
 use prometheus_client::metrics::histogram::Histogram as PromHistogram;
 use prometheus_client::metrics::info::Info;
-use prometheus_client::registry::Registry;
+use prometheus_client::registry::{Metric, Registry, Unit};
+use std::fmt::Debug;
+use tracing::{debug, trace};
 
 #[derive(Clone, Hash, Default, Debug, PartialEq, Eq, EncodeLabelSet)]
 pub struct RouteIdentifier {
@@ -83,6 +84,11 @@ pub struct TCPLabels {
 	pub protocol: BindProtocol,
 }
 
+#[derive(Clone, Hash, Debug, PartialEq, Eq, EncodeLabelSet)]
+pub struct ConnectLabels {
+	pub transport: DefaultedUnknown<RichStrng>,
+}
+
 type Counter = Family<HTTPLabels, counter::Counter>;
 type Histogram<T> = Family<T, prometheus_client::metrics::histogram::Histogram>;
 type TCPCounter = Family<TCPLabels, counter::Counter>;
@@ -103,10 +109,86 @@ pub struct Metrics {
 	pub gen_ai_request_duration: Histogram<GenAILabels>,
 	pub gen_ai_time_per_output_token: Histogram<GenAILabels>,
 	pub gen_ai_time_to_first_token: Histogram<GenAILabels>,
+
+	pub response_bytes: Family<HTTPLabels, counter::Counter>,
+
+	pub tcp_downstream_rx_bytes: Family<TCPLabels, counter::Counter>,
+	pub tcp_downstream_tx_bytes: Family<TCPLabels, counter::Counter>,
+
+	pub upstream_connect_duration: Histogram<ConnectLabels>,
+	pub tls_handshake_duration: Histogram<TCPLabels>,
+}
+
+// FilteredRegistry is a wrapper around Registry that allows to filter out certain metrics.
+// Note: this currently only excludes them from the registry, but the underlying metrics are still
+// stored. This can result in memory cost, etc to store the labels.
+// A more robust future solution would be to have a sort of `Disabled` metric that does not store;
+// note that even still, we would be computing the labels (and then dropping them), but in many cases
+// the same labels are shared by many metrics, and are cheap to construct, so likely not a major concern.
+struct FilteredRegistry<'a> {
+	registry: &'a mut Registry,
+	removes: FzHashSet<String>,
+}
+
+impl<'a> FilteredRegistry<'a> {
+	fn should_skip(&self, name: &str, unit: Option<&Unit>) -> bool {
+		let mut names = vec![
+			name.to_string(),
+			format!("{}_total", name),
+			format!("{}_{}_total", agent_core::metrics::PREFIX, name),
+			format!("{}_{}", agent_core::metrics::PREFIX, name),
+		];
+		if let Some(unit) = unit {
+			names.extend_from_slice(&[
+				format!("{}_{}", name, unit.as_str()),
+				format!("{}_{}_total", name, unit.as_str()),
+				format!(
+					"{}_{}_{}_total",
+					agent_core::metrics::PREFIX,
+					name,
+					unit.as_str()
+				),
+				format!("{}_{}_{}", agent_core::metrics::PREFIX, name, unit.as_str()),
+			])
+		}
+
+		for n in names.into_iter() {
+			let exclude = self.removes.contains(&n);
+			trace!(name = n, exclude, "check metric for exclusion");
+			if exclude {
+				return true;
+			}
+		}
+		false
+	}
+	fn register(&mut self, name: impl Into<String>, help: impl Into<String>, metric: impl Metric) {
+		let name = name.into();
+		if self.should_skip(&name, None) {
+			debug!("skip register metric: {}", name);
+			return;
+		}
+		self.registry.register(name, help, metric);
+	}
+
+	fn register_with_unit(
+		&mut self,
+		name: impl Into<String>,
+		help: impl Into<String>,
+		unit: Unit,
+		metric: impl Metric,
+	) {
+		let name = name.into();
+		if self.should_skip(&name, Some(&unit)) {
+			debug!("skip register metric: {}_{}", name, unit.as_str());
+			return;
+		}
+		self.registry.register_with_unit(name, help, unit, metric);
+	}
 }
 
 impl Metrics {
-	pub fn new(registry: &mut Registry) -> Self {
+	pub fn new(registry: &mut Registry, removes: FzHashSet<String>) -> Self {
+		let mut registry = FilteredRegistry { registry, removes };
 		registry.register(
 			"build",
 			"Agentgateway build information",
@@ -154,28 +236,87 @@ impl Metrics {
 
 		Metrics {
 			requests: build(
-				registry,
+				&mut registry,
 				"requests",
 				"The total number of HTTP requests sent",
 			),
 			downstream_connection: build(
-				registry,
+				&mut registry,
 				"downstream_connections",
 				"The total number of downstream connections established",
 			),
 
-			mcp_requests: build(registry, "mcp_requests", "Total number of MCP tool calls"),
+			mcp_requests: build(
+				&mut registry,
+				"mcp_requests",
+				"Total number of MCP tool calls",
+			),
 
 			gen_ai_token_usage,
 			gen_ai_request_duration,
 			gen_ai_time_per_output_token,
 			gen_ai_time_to_first_token,
+
+			response_bytes: {
+				let m = Family::<HTTPLabels, _>::default();
+				registry.register_with_unit(
+					"response",
+					"Total HTTP response bytes received",
+					Unit::Bytes,
+					m.clone(),
+				);
+				m
+			},
+			tcp_downstream_rx_bytes: {
+				let m = Family::<TCPLabels, _>::default();
+				registry.register_with_unit(
+					"downstream_received",
+					"Total TCP bytes received per connection labels",
+					Unit::Bytes,
+					m.clone(),
+				);
+				m
+			},
+			tcp_downstream_tx_bytes: {
+				let m = Family::<TCPLabels, _>::default();
+				registry.register_with_unit(
+					"downstream_sent",
+					"Total TCP bytes transmitted per connection labels",
+					Unit::Bytes,
+					m.clone(),
+				);
+				m
+			},
+			upstream_connect_duration: {
+				let m = Family::<ConnectLabels, _>::new_with_constructor(move || {
+					PromHistogram::new(CONNECT_DURATION_BUCKET)
+				});
+				registry.register_with_unit(
+					"upstream_connect_duration",
+					"Duration to establish upstream connection (seconds)",
+					Unit::Seconds,
+					m.clone(),
+				);
+				m
+			},
+			tls_handshake_duration: {
+				let m = Family::<TCPLabels, _>::new_with_constructor(move || {
+					PromHistogram::new(CONNECT_DURATION_BUCKET)
+				});
+				registry.register_with_unit(
+					"tls_handshake_duration",
+					"Duration to complete inbound TLS/HTTPS handshake (seconds)",
+					Unit::Seconds,
+					m.clone(),
+				);
+				m
+			},
 		}
 	}
 }
 
-fn build<T: Clone + std::hash::Hash + Eq + Send + Sync + Debug + EncodeLabelSet + 'static>(
-	registry: &mut Registry,
+fn build<'a, T: Clone + std::hash::Hash + Eq + Send + Sync + Debug + EncodeLabelSet + 'static>(
+	registry: &mut FilteredRegistry<'a>,
 	name: &str,
 	help: &str,
 ) -> Family<T, counter::Counter> {
@@ -192,6 +333,20 @@ const TOKEN_USAGE_BUCKET: [f64; 14] = [
 // https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-metrics/#metric-gen_aiserverrequestduration
 const REQUEST_DURATION_BUCKET: [f64; 14] = [
 	0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56, 5.12, 10.24, 20.48, 40.96, 81.92,
+];
+// Finer-grained, exponentially growing buckets for TCP/TLS connect.
+// Keep in seconds (Prometheus convention). Prioritize sub-second resolution, with a few larger outlier buckets.
+const CONNECT_DURATION_BUCKET: [f64; 10] = [
+	0.0005, // 0.5 ms
+	0.0015, // 1.5 ms
+	0.0043, // 4.3 ms
+	0.0126, // 12.6 ms
+	0.0368, // 36.8 ms
+	0.108,  // 108 ms
+	0.316,  // 316 ms
+	0.924,  // 924 ms
+	2.71,   // 2.71 s
+	8.0,    // 8 s
 ];
 // https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-metrics/#metric-gen_aiservertime_per_output_token
 // NOTE: the spec has SHOULD, but is not smart enough to handle the faster LLMs.

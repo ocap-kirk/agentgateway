@@ -5,6 +5,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
 use http::Method;
+use http::uri::PathAndQuery;
 use itertools::Itertools;
 use rmcp::transport::StreamableHttpServerConfig;
 use tracing::warn;
@@ -123,11 +124,11 @@ impl App {
 		req.extensions_mut().insert(Arc::new(ctx));
 
 		// Check if authentication is required and JWT token is missing
-		if let Some(_) = &authn
+		if let Some(auth) = &authn
 			&& req.extensions().get::<Claims>().is_none()
 			&& !Self::is_well_known_endpoint(req.uri().path())
 		{
-			return Self::create_auth_required_response(&req).into_response();
+			return Self::create_auth_required_response(&req, auth).into_response();
 		}
 
 		match (req.uri().path(), req.method(), authn) {
@@ -209,9 +210,23 @@ pub struct McpTarget {
 }
 
 impl App {
-	fn create_auth_required_response(req: &Request) -> Response {
+	fn create_auth_required_response(req: &Request, auth: &McpAuthentication) -> Response {
 		let request_path = req.uri().path();
-		let proxy_url = Self::get_redirect_url(req, request_path);
+		// If the `resource` is explicitly configured, use that as the base. otherwise, derive it from the
+		// the request URL
+		let proxy_url = auth
+			.resource_metadata
+			.extra
+			.get("resource")
+			.and_then(|v| v.as_str())
+			.and_then(|u| http::uri::Uri::try_from(u).ok())
+			.and_then(|uri| {
+				let mut parts = uri.into_parts();
+				parts.path_and_query = Some(PathAndQuery::from_static(""));
+				Uri::from_parts(parts).ok()
+			})
+			.and_then(|uri| uri.to_string().strip_suffix("/").map(ToString::to_string))
+			.unwrap_or_else(|| Self::get_redirect_url(req, request_path));
 		let www_authenticate_value = format!(
 			"Bearer resource_metadata=\"{proxy_url}/.well-known/oauth-protected-resource{request_path}\""
 		);
